@@ -171,7 +171,7 @@ const MainDashboard: React.FC = () => {
     executeTrade('HUMAN', pendingConfirmation.assetId, pendingConfirmation.type, pendingConfirmation.units);
     setPendingConfirmation(null);
   };
-
+  //************************ */
   const toggleProjectorFullscreen = () => {
     setActiveTab('PROJECTOR');
     if (!document.fullscreenElement) {
