@@ -12,6 +12,7 @@ import {
   quoteBuy,
   quoteSell,
   formatCurrency,
+  REDEEM_OPTIONS,
 } from './engine/economics';
 import { OwnershipGrid } from './components/OwnershipGrid';
 import {
@@ -43,6 +44,18 @@ import {
   Maximize2,
   Home,
   LayoutGrid,
+  Package,
+  Gift,
+  Truck,
+  CheckCircle2,
+  Coins,
+  Radio,
+  ShieldCheck,
+  FileCode,
+  ExternalLink,
+  Lock,
+  Server,
+  Activity,
 } from 'lucide-react';
 
 type ActiveTab = 'LANDING' | 'ARENA' | 'ASSET_DETAIL' | 'PORTFOLIO' | 'RANKING' | 'PROJECTOR';
@@ -51,6 +64,9 @@ const MainDashboard: React.FC = () => {
   const {
     mode,
     setMode,
+    walletAddress,
+    connectWallet,
+    walletBalanceMon,
     isRunning,
     setIsRunning,
     speedMs,
@@ -63,13 +79,27 @@ const MainDashboard: React.FC = () => {
     trades,
     leaders,
     notifications,
+    redemptions,
     majorityCelebration,
     dismissCelebration,
     executeTrade,
     claimHumanRewards,
+    executeBurnRedeem,
+    injectBusinessRealYield,
     triggerCompetitiveBattle,
     resetSimulation,
     exportDemoResults,
+
+    // Backend integration
+    backendOnline,
+    sseConnected,
+    contractInfo,
+    authSession,
+    authenticateWalletWithMonad,
+    logoutAuthSession,
+    backendEvents,
+    backendLeaderboard,
+    refreshBackendData,
   } = useSimulation();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('LANDING');
@@ -81,17 +111,51 @@ const MainDashboard: React.FC = () => {
     'local-genesis': 10,
   });
   const [showStatsModal, setShowStatsModal] = useState<boolean>(false);
+  const [showContractModal, setShowContractModal] = useState<boolean>(false);
+  const [leaderboardSource, setLeaderboardSource] = useState<'SIMULATOR' | 'BACKEND'>('SIMULATOR');
+  const [isSigningAuth, setIsSigningAuth] = useState<boolean>(false);
+  const [contractCopied, setContractCopied] = useState<boolean>(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     assetId: AssetId;
     type: 'BUY' | 'SELL';
     units: bigint;
     quoteSummary: string;
   } | null>(null);
+  const [pendingBurnConfirmation, setPendingBurnConfirmation] = useState<{
+    assetId: AssetId;
+    optionId: string;
+    optionTitle: string;
+    requiredUnits: bigint;
+    realWorldItem: string;
+  } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   const human = participants['HUMAN'];
   const assetList = useMemo(() => Object.values(assets), [assets]);
   const selectedAsset = assets[selectedAssetId];
+
+  const handleSignAuth = async () => {
+    setIsSigningAuth(true);
+    try {
+      await authenticateWalletWithMonad();
+    } finally {
+      setIsSigningAuth(false);
+    }
+  };
+
+  const copyContractAddress = () => {
+    if (contractInfo?.contract.address) {
+      navigator.clipboard.writeText(contractInfo.contract.address);
+      setContractCopied(true);
+      setTimeout(() => setContractCopied(false), 2000);
+    }
+  };
+
+  const confirmBurnRedeem = () => {
+    if (!pendingBurnConfirmation) return;
+    executeBurnRedeem(pendingBurnConfirmation.assetId, pendingBurnConfirmation.optionId);
+    setPendingBurnConfirmation(null);
+  };
 
   // Clasificación global de participantes (Humano + 40 Bots)
   const leaderboard = useMemo(() => {
@@ -231,17 +295,104 @@ const MainDashboard: React.FC = () => {
             </nav>
           </div>
 
-          {/* SALDO Y SELECTOR DE MODO (DEMO MODE vs MONAD TESTNET) */}
+          {/* ESTADO BACKEND & SSE STREAM + SELECTOR DE MODO */}
           <div className="flex items-center gap-3">
-            <div className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-right">
-              <span className="block text-[10px] uppercase tracking-wider text-slate-400">
-                Saldo Simulado ({mode === 'DEMO' ? 'Off-Chain Demo' : 'Testnet'})
-              </span>
-              <span className="font-mono text-sm font-bold text-emerald-400" data-testid="human-balance">
-                {mode === 'DEMO' ? formatCurrency(human.balance) : '0.00 MON (Sin Wallet)'}
-              </span>
+            {/* Indicadores vivos de Backend y SSE */}
+            <div className="hidden xl:flex items-center gap-2">
+              <div
+                title={backendOnline ? "Servidor Express en puerto 3000 activo" : "Intentando reconectar con servidor"}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition ${
+                  backendOnline
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                API {backendOnline ? 'Conectada (:3000)' : 'Desconectada'}
+              </div>
+
+              <div
+                title="Server-Sent Events activo para actualizaciones en tiempo real a proyectores y celulares"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-semibold transition ${
+                  sseConnected
+                    ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+                    : 'bg-slate-800/80 border-slate-700 text-slate-400'
+                }`}
+              >
+                <Radio className={`w-3 h-3 ${sseConnected ? 'text-cyan-400 animate-pulse' : 'text-slate-500'}`} />
+                SSE Stream {sseConnected ? '< 300ms' : 'Offline'}
+              </div>
+
+              <button
+                onClick={() => setShowContractModal(true)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-[11px] font-bold cursor-pointer transition shadow-sm"
+              >
+                <FileCode className="w-3 h-3 text-violet-400" />
+                Contrato & APIs
+              </button>
             </div>
 
+            {/* Saldo y Wallet */}
+            {mode === 'MONAD_TESTNET' ? (
+              <div className="flex items-center gap-2">
+                {walletAddress ? (
+                  <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5">
+                    <div className="text-right">
+                      <span className="block text-[10px] uppercase font-mono tracking-wider text-slate-400">
+                        {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
+                      </span>
+                      <span className="font-mono text-xs font-bold text-violet-300">
+                        {walletBalanceMon} MON
+                      </span>
+                    </div>
+
+                    {authSession ? (
+                      <div className="flex items-center gap-1 pl-2 border-l border-slate-800">
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-[10px] font-bold text-emerald-300">
+                          <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                          SIWE OK
+                        </span>
+                        <button
+                          onClick={logoutAuthSession}
+                          title="Cerrar sesión autenticada"
+                          className="text-slate-500 hover:text-slate-300 p-0.5 cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleSignAuth}
+                        disabled={isSigningAuth}
+                        className="px-2 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer transition disabled:opacity-50"
+                      >
+                        <Lock className="w-3 h-3" />
+                        {isSigningAuth ? 'Firmando...' : 'Firmar SIWE'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={connectWallet}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-xs font-bold shadow-md shadow-violet-600/30 cursor-pointer hover:opacity-95"
+                  >
+                    <Wallet className="w-3.5 h-3.5" />
+                    Conectar Wallet
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-right">
+                <span className="block text-[10px] uppercase tracking-wider text-slate-400">
+                  Saldo Simulado (Off-Chain Demo)
+                </span>
+                <span className="font-mono text-sm font-bold text-emerald-400" data-testid="human-balance">
+                  {formatCurrency(human.balance)}
+                </span>
+              </div>
+            )}
+
+            {/* Selector DEMO vs MONAD TESTNET */}
             <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-800">
               <button
                 onClick={() => setMode('DEMO')}
@@ -619,6 +770,22 @@ const MainDashboard: React.FC = () => {
                           )}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5">{asset.description}</p>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-violet-500/15 border border-violet-500/30 text-violet-300 text-[10px] font-semibold">
+                            <Package className="w-3 h-3 text-violet-400" />
+                            Respaldo RWA: {asset.rwaBacking}
+                          </span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
+                            <Coins className="w-3 h-3 text-emerald-400" />
+                            Yield Real Activo
+                          </span>
+                          {asset.totalBurnedUnits > 0n && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/30 text-orange-300 text-[10px] font-bold">
+                              <Flame className="w-3 h-3 text-orange-400" />
+                              {asset.totalBurnedUnits.toString()} u. Redimidas
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="text-right shrink-0">
@@ -937,6 +1104,168 @@ const MainDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* MÓDULO RWA: REDENCIÓN FÍSICA (BURN-TO-REDEEM) Y RENDIMIENTO REAL (REAL YIELD) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* 1. Canjear Activo Físico (Burn-to-Redeem) */}
+              <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/20 border border-amber-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Gift className="w-5 h-5 text-amber-400" />
+                        <h3 className="text-base font-extrabold text-white">
+                          Canjear Activo Físico (Burn-to-Redeem)
+                        </h3>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Quema tus participaciones on-chain y recibe el producto o servicio tangible con trazabilidad.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[10px] font-black uppercase tracking-wider shrink-0">
+                      RWA Físico
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const option = REDEEM_OPTIONS[selectedAssetId];
+                    const userUnits = human.holdings[selectedAssetId];
+                    const canRedeem = userUnits >= option.requiredUnits;
+                    const remainingNeeded = option.requiredUnits - userUnits;
+
+                    return (
+                      <div className="mt-5 space-y-4">
+                        <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-bold text-amber-300 block">{option.title}</span>
+                              <p className="text-xs text-slate-300 mt-0.5">{option.description}</p>
+                            </div>
+                            <span className="px-2 py-0.5 rounded bg-violet-500/20 border border-violet-500/30 text-violet-300 text-[10px] font-semibold shrink-0">
+                              {option.badge}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Unidades a Quemar:</span>
+                              <span className="font-mono font-bold text-amber-400">
+                                {option.requiredUnits.toString()} u.
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[11px]">Tu Tenencia Disponible:</span>
+                              <span className={`font-mono font-bold ${canRedeem ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                {userUnits.toString()} u.
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1">
+                            <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                            <span>Logística: {option.estimatedDelivery}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 pt-1">
+                          <div className="text-xs text-slate-400">
+                            <span className="block text-[11px]">Total Redimidas (Burned):</span>
+                            <span className="font-mono font-bold text-orange-400">
+                              {selectedAsset.totalBurnedUnits.toString()} u. fuera de circulación
+                            </span>
+                          </div>
+
+                          <button
+                            onClick={() =>
+                              setPendingBurnConfirmation({
+                                assetId: selectedAssetId,
+                                optionId: option.id,
+                                optionTitle: option.title,
+                                requiredUnits: option.requiredUnits,
+                                realWorldItem: option.realWorldItem,
+                              })
+                            }
+                            disabled={!canRedeem}
+                            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer ${
+                              canRedeem
+                                ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-slate-950 shadow-lg shadow-orange-500/20'
+                                : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                            }`}
+                          >
+                            <Flame className="w-4 h-4" />
+                            {canRedeem
+                              ? `Quemar ${option.requiredUnits.toString()} u. y Canjear Físico`
+                              : `Te faltan ${remainingNeeded.toString()} u. para canjear`}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* 2. Rendimiento Real del Negocio (Real Yield / Revenue Sharing) */}
+              <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/20 border border-emerald-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Coins className="w-5 h-5 text-emerald-400" />
+                        <h3 className="text-base font-extrabold text-white">
+                          Flujo de Caja Real (Real Yield / Revenue Sharing)
+                        </h3>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Inyección directa de ventas del negocio físico al Reward Pool, repartida pro-rata a todos los tenedores.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] font-black uppercase tracking-wider shrink-0">
+                      Yield Orgánico
+                    </span>
+                  </div>
+
+                  <div className="mt-5 space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs">
+                        <span className="text-slate-400 block text-[11px]">Facturación Física Inyectada:</span>
+                        <span className="font-mono text-lg font-black text-emerald-400 block mt-0.5">
+                          {formatCurrency(selectedAsset.businessRevenueInjected)}
+                        </span>
+                        <span className="text-[10px] text-slate-500">Total histórico al pool</span>
+                      </div>
+
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs">
+                        <span className="text-slate-400 block text-[11px]">Proyección Mensual:</span>
+                        <span className="font-mono text-lg font-black text-white block mt-0.5">
+                          +{formatCurrency(selectedAsset.monthlyYieldTarget, 0)}
+                        </span>
+                        <span className="text-[10px] text-emerald-400">Reparto 100% pro-rata</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-xs space-y-1">
+                      <span className="text-slate-400 block text-[11px] font-bold uppercase tracking-wider">
+                        Fuente del Flujo Real:
+                      </span>
+                      <p className="text-slate-300 leading-relaxed">{selectedAsset.yieldSource}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-800/80 mt-4">
+                  <p className="text-[11px] text-slate-400">
+                    Simulación interactiva para el jurado: inyecta el flujo de caja del mes en vivo.
+                  </p>
+                  <button
+                    onClick={() => injectBusinessRealYield(selectedAssetId)}
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 shrink-0 cursor-pointer transition"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    Simular Liquidación (+MON al Pool)
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* CUADRÍCULA OBLIGATORIA DE 20 x 50 CELDAS (1.000 UNIDADES) */}
             <OwnershipGrid
               asset={selectedAsset}
@@ -1140,72 +1469,243 @@ const MainDashboard: React.FC = () => {
                 </table>
               </div>
             </div>
+
+            {/* SECCIÓN DE CERTIFICADOS Y DESPACHO FÍSICO RWA (BURN-TO-REDEEM) */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                    <Package className="w-4 h-4 text-amber-400" />
+                    Certificados de Redención Física y Despachos (Burn-to-Redeem)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Registro de micro-acciones quemadas para canjear productos o servicios físicos reales con trazabilidad on-chain.
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-bold">
+                  {redemptions.length} Canjes Realizados
+                </span>
+              </div>
+
+              {redemptions.length === 0 ? (
+                <div className="bg-slate-950 rounded-xl p-8 border border-slate-800 text-center space-y-3">
+                  <Gift className="w-10 h-10 text-slate-600 mx-auto" />
+                  <h4 className="text-sm font-bold text-white">Aún no has canjeado activos físicos</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Acumula participaciones de los 4 mercados en la Arena y quémalas en el Detalle del Activo para canjear bolsas de café especial, kits baristas, láminas de arte o pases VIP de coworking.
+                  </p>
+                  <button
+                    onClick={() => setActiveTab('ARENA')}
+                    className="px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold cursor-pointer transition"
+                  >
+                    Ir a la Arena a Operar
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {redemptions.map((r) => (
+                    <div
+                      key={r.id}
+                      className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
+                            {r.id}
+                          </span>
+                          <span className="font-bold text-white text-sm">{r.realWorldItem}</span>
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                            {r.status === 'CONFIRMED' ? 'Confirmado On-Chain' : r.status}
+                          </span>
+                        </div>
+                        <p className="text-slate-400">
+                          Mercado: <strong className="text-slate-200">{r.assetName}</strong> • Canjeado el{' '}
+                          {new Date(r.timestamp).toLocaleString('es-CO')}
+                        </p>
+                        <p className="font-mono text-slate-500 text-[11px] truncate">
+                          Tracking / Delivery Hash: {r.trackingHash}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-right shrink-0">
+                        <div>
+                          <span className="text-slate-400 block text-[11px]">Unidades Quemadas:</span>
+                          <span className="font-mono font-black text-orange-400 text-sm">
+                            -{r.unitsBurned.toString()} u.
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-emerald-400 font-semibold text-[11px]">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          Despacho en Preparación
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* 5. RANKING GLOBAL Y LÍDERES */}
         {activeTab === 'RANKING' && (
           <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-              <h2 className="text-lg font-black text-white mb-4">
-                Clasificación General de Jugadores (Humano + 40 Bots Competitivos)
-              </h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-950 text-slate-400 uppercase">
-                      <th className="p-3">Pos</th>
-                      <th className="p-3">Participante</th>
-                      <th className="p-3">Perfil / Estrategia</th>
-                      <th className="p-3">Unidades Controladas</th>
-                      <th className="p-3">Mercados Liderados</th>
-                      <th className="p-3">Patrimonio Neto Est.</th>
-                      <th className="p-3">Insignias</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {leaderboard.slice(0, 20).map((entry, idx) => (
-                      <tr
-                        key={entry.id}
-                        className={
-                          !entry.isBot
-                            ? 'bg-emerald-950/30 border-l-4 border-emerald-400'
-                            : 'hover:bg-slate-800/40'
-                        }
-                      >
-                        <td className="p-3 font-mono font-bold text-slate-300">#{idx + 1}</td>
-                        <td className="p-3 font-bold text-white">{entry.name}</td>
-                        <td className="p-3 text-slate-400">
-                          {entry.isBot ? entry.strategy : 'HUMANO'}
-                        </td>
-                        <td className="p-3 font-mono font-bold text-emerald-400">
-                          {entry.totalUnits.toString()} u.
-                        </td>
-                        <td className="p-3 font-mono text-violet-300">{entry.assetsLed}</td>
-                        <td className="p-3 font-mono text-white">
-                          {formatCurrency(entry.netWorth, 0)}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex flex-wrap gap-1">
-                            {entry.badges.length > 0 ? (
-                              entry.badges.map((b) => (
-                                <span
-                                  key={b}
-                                  className="px-2 py-0.5 rounded bg-violet-500/20 border border-violet-500/40 text-violet-200 text-[10px] font-semibold"
-                                >
-                                  {b}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="text-slate-600">—</span>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-lg font-black text-white flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-amber-400" />
+                    Clasificación General de Jugadores
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    {leaderboardSource === 'SIMULATOR'
+                      ? 'Ranking en memoria del motor local (Humano + 40 Bots Competitivos)'
+                      : 'Leaderboard global agregado del Servidor Backend en Monad (API: /api/tap-to-own/leaderboard)'}
+                  </p>
+                </div>
+
+                <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                  <button
+                    onClick={() => setLeaderboardSource('SIMULATOR')}
+                    className={`px-3 py-1.5 rounded-md font-bold transition cursor-pointer ${
+                      leaderboardSource === 'SIMULATOR'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Simulador Local (40 Bots)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setLeaderboardSource('BACKEND');
+                      refreshBackendData();
+                    }}
+                    className={`px-3 py-1.5 rounded-md font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      leaderboardSource === 'BACKEND'
+                        ? 'bg-emerald-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Server className="w-3.5 h-3.5" />
+                    Servidor Backend ({backendLeaderboard.length})
+                  </button>
+                </div>
               </div>
+
+              {leaderboardSource === 'SIMULATOR' ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 uppercase">
+                        <th className="p-3">Pos</th>
+                        <th className="p-3">Participante</th>
+                        <th className="p-3">Perfil / Estrategia</th>
+                        <th className="p-3">Unidades Controladas</th>
+                        <th className="p-3">Mercados Liderados</th>
+                        <th className="p-3">Patrimonio Neto Est.</th>
+                        <th className="p-3">Insignias</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {leaderboard.slice(0, 20).map((entry, idx) => (
+                        <tr
+                          key={entry.id}
+                          className={
+                            !entry.isBot
+                              ? 'bg-emerald-950/30 border-l-4 border-emerald-400'
+                              : 'hover:bg-slate-800/40'
+                          }
+                        >
+                          <td className="p-3 font-mono font-bold text-slate-300">#{idx + 1}</td>
+                          <td className="p-3 font-bold text-white">{entry.name}</td>
+                          <td className="p-3 text-slate-400">
+                            {entry.isBot ? entry.strategy : 'HUMANO'}
+                          </td>
+                          <td className="p-3 font-mono font-bold text-emerald-400">
+                            {entry.totalUnits.toString()} u.
+                          </td>
+                          <td className="p-3 font-mono text-violet-300">{entry.assetsLed}</td>
+                          <td className="p-3 font-mono text-white">
+                            {formatCurrency(entry.netWorth, 0)}
+                          </td>
+                          <td className="p-3">
+                            <div className="flex flex-wrap gap-1">
+                              {entry.badges.length > 0 ? (
+                                entry.badges.map((b) => (
+                                  <span
+                                    key={b}
+                                    className="px-2 py-0.5 rounded bg-violet-500/20 border border-violet-500/40 text-violet-200 text-[10px] font-semibold"
+                                  >
+                                    {b}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 uppercase">
+                        <th className="p-3">Pos</th>
+                        <th className="p-3">Wallet / Inversionista</th>
+                        <th className="p-3">Micro-Acciones Poseídas</th>
+                        <th className="p-3">Lotes Bajo Control</th>
+                        <th className="p-3">Total Invertido (MON)</th>
+                        <th className="p-3">Dividendos Ganados (MON)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800">
+                      {backendLeaderboard.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-slate-500 font-medium">
+                            No hay inversores registrados aún en el backend. ¡Conéctate y realiza un Tap para liderar el tablero!
+                          </td>
+                        </tr>
+                      ) : (
+                        backendLeaderboard.map((entry, idx) => (
+                          <tr key={entry.address} className="hover:bg-slate-800/40">
+                            <td className="p-3 font-mono font-bold text-slate-300">#{idx + 1}</td>
+                            <td className="p-3 font-mono font-bold text-white flex items-center gap-1.5">
+                              {entry.address.startsWith('0x')
+                                ? `${entry.address.slice(0, 10)}...${entry.address.slice(-6)}`
+                                : entry.address}
+                              {walletAddress && entry.address.toLowerCase() === walletAddress.toLowerCase() && (
+                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                                  TÚ
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 font-mono font-bold text-emerald-400">{entry.totalShares} u.</td>
+                            <td className="p-3 text-slate-300">
+                              {entry.patronOfAssets && entry.patronOfAssets.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {entry.patronOfAssets.map((name) => (
+                                    <span key={name} className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold">
+                                      👑 {name}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </td>
+                            <td className="p-3 font-mono text-white">{entry.totalInvestedMon.toFixed(4)} MON</td>
+                            <td className="p-3 font-mono text-emerald-400 font-bold">+{entry.totalDividendsEarned.toFixed(4)} MON</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1238,6 +1738,24 @@ const MainDashboard: React.FC = () => {
                 <Maximize2 className="w-4 h-4" />
                 Pantalla Completa
               </button>
+            </div>
+
+            {/* Banner de Estado SSE Monad */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-violet-950/60 via-slate-900 to-slate-950 border border-violet-500/30 rounded-xl px-4 py-2.5 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+                <span className="font-bold text-white flex items-center gap-1.5">
+                  <Radio className="w-4 h-4 text-cyan-400" />
+                  Stream SSE Monad en Vivo:
+                </span>
+                <span className="text-cyan-300 font-mono">
+                  {sseConnected ? 'Conectado • Latencia < 300ms activa' : 'Off-line • Conectando a /api/tap-to-own/stream'}
+                </span>
+              </div>
+              <div className="flex items-center gap-4 text-slate-400 font-mono text-[11px]">
+                <span>Transacciones Simuladas: <strong className="text-white">{tickCount}</strong></span>
+                <span>Eventos Backend: <strong className="text-emerald-400">{backendEvents.length}</strong></span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1349,6 +1867,54 @@ const MainDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* MODAL DE CONFIRMACIÓN PARA REDENCIÓN FÍSICA (BURN-TO-REDEEM) */}
+      {pendingBurnConfirmation && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border-2 border-amber-500/60 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-base">
+              <Flame className="w-5 h-5 text-amber-400" />
+              Confirmar Redención Física (Burn-to-Redeem)
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Producto a Canjear:</span>
+                <span className="font-bold text-white text-right">{pendingBurnConfirmation.realWorldItem}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Unidades a Quemar:</span>
+                <span className="font-mono font-bold text-orange-400">
+                  {pendingBurnConfirmation.requiredUnits.toString()} u.
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Impacto en Suministro:</span>
+                <span className="text-emerald-400 font-semibold">Reducción permanente de totalSupply</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 leading-relaxed">
+              ⚠️ <strong>Esta acción es irreversible:</strong> Las {pendingBurnConfirmation.requiredUnits.toString()} unidades se retirarán permanentemente de la circulación on-chain (Burn) y se emitirá tu certificado de canje con código de despacho físico.
+            </p>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setPendingBurnConfirmation(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmBurnRedeem}
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 text-slate-950 text-xs font-black cursor-pointer shadow-md shadow-orange-500/30 hover:opacity-95"
+              >
+                Confirmar Quema y Canje
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CELEBRACIÓN ESPECIAL DE MAYORÍA ABSOLUTA (> 500 DE 1.000 UNIDADES) */}
       {majorityCelebration && (
         <div
@@ -1394,6 +1960,130 @@ const MainDashboard: React.FC = () => {
               <p>Operaciones del Jugador Humano: <strong className="text-emerald-400">{human.tradesCount}</strong></p>
               <p>Bots Operativos: <strong className="text-violet-300">40 Bots independientes</strong></p>
               <p>Prefijo de Auditoría: <code className="text-emerald-400">DEMO-*</code> (Separado de saldos on-chain)</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE INFORMACIÓN DEL CONTRATO Y CONEXIÓN BACKEND / MONAD TESTNET */}
+      {showContractModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-violet-600/30 border border-violet-500/40 flex items-center justify-center text-violet-300">
+                  <FileCode className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    TapToOwnArena • Contrato Inteligente & API Backend
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Infraestructura integrada en Monad Testnet (Puerto 3000)
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowContractModal(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Red & Conexión */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 uppercase font-mono text-[10px] block">Red Blockchain</span>
+                <p className="font-bold text-white flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-violet-400" />
+                  {contractInfo?.network.name || 'Monad Testnet'}
+                </p>
+                <p className="text-slate-400 font-mono text-[11px]">Chain ID: {contractInfo?.network.chainId || 10143} (0x279f)</p>
+                <p className="text-slate-400 font-mono text-[11px] truncate">RPC: {contractInfo?.network.rpcUrl || 'https://testnet-rpc.monad.xyz/'}</p>
+              </div>
+
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-500 uppercase font-mono text-[10px] block">Servidor Express (Puerto 3000)</span>
+                <p className="font-bold text-emerald-400 flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                  {backendOnline ? 'Servidor Backend Activo & Saludable' : 'Conectando con Backend...'}
+                </p>
+                <p className="text-slate-400 text-[11px]">Server-Sent Events: {sseConnected ? 'Transmitiendo (< 300ms)' : 'Reconectando...'}</p>
+                <p className="text-slate-400 text-[11px]">Sesión SIWE: {authSession ? `Autenticada (${authSession.address.slice(0, 8)}...)` : 'Sin autenticar'}</p>
+              </div>
+            </div>
+
+            {/* Dirección de Contrato */}
+            <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 text-xs font-semibold">Dirección del Contrato TapToOwnArena:</span>
+                <button
+                  onClick={copyContractAddress}
+                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold cursor-pointer transition flex items-center gap-1"
+                >
+                  {contractCopied ? '¡Copiado!' : 'Copiar Dirección'}
+                </button>
+              </div>
+              <code className="block bg-slate-900 px-3 py-2 rounded-lg font-mono text-xs text-violet-300 break-all select-all">
+                {contractInfo?.contract.address || '0x71C8A329F64eB57f12C8519B91A088aE4601A49B'}
+              </code>
+            </div>
+
+            {/* Enlaces Rápidos del Sistema */}
+            <div className="space-y-1.5">
+              <span className="text-slate-400 text-xs font-semibold block">Herramientas & Endpoints en Vivo:</span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <a
+                  href="/monitor"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 hover:bg-violet-950/40 border border-slate-800 hover:border-violet-500/40 text-violet-300 text-xs font-bold transition"
+                >
+                  <Server className="w-3.5 h-3.5" />
+                  Dev Monitor
+                  <ExternalLink className="w-3 h-3 text-slate-500" />
+                </a>
+                <a
+                  href="/health"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 hover:bg-emerald-950/40 border border-slate-800 hover:border-emerald-500/40 text-emerald-400 text-xs font-bold transition"
+                >
+                  <Activity className="w-3.5 h-3.5" />
+                  Health Check
+                  <ExternalLink className="w-3 h-3 text-slate-500" />
+                </a>
+                <a
+                  href="/api/tap-to-own/assets"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 hover:bg-blue-950/40 border border-slate-800 hover:border-blue-500/40 text-blue-300 text-xs font-bold transition"
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  API Activos
+                  <ExternalLink className="w-3 h-3 text-slate-500" />
+                </a>
+                <a
+                  href="https://testnet.monadexplorer.com/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 hover:bg-cyan-950/40 border border-slate-800 hover:border-cyan-500/40 text-cyan-300 text-xs font-bold transition"
+                >
+                  <Radio className="w-3.5 h-3.5" />
+                  Monad Explorer
+                  <ExternalLink className="w-3 h-3 text-slate-500" />
+                </a>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowContractModal(false)}
+                className="px-5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs cursor-pointer transition shadow"
+              >
+                Cerrar Ventana
+              </button>
             </div>
           </div>
         </div>

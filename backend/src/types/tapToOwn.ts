@@ -1,6 +1,8 @@
 export interface CoffeeAsset {
   id: number;
+  slug: string;
   name: string;
+  category: string;
   variety: string;
   origin: string;
   altitude: string;
@@ -16,6 +18,11 @@ export interface CoffeeAsset {
   totalVolume: number; // volumen total comerciado en MON
   color: string; // código de color para UI / Proyector
   accentColor: string;
+  totalBurnedUnits: number;
+  businessRevenueInjected: number;
+  rwaBacking: string;
+  monthlyYieldTarget: number;
+  yieldSource: string;
 }
 
 export interface Shareholder {
@@ -39,7 +46,21 @@ export interface TapEvent {
   timestamp: number;
   isNewPatron: boolean;
   previousPatron?: string;
-  type: 'BUY' | 'SELL';
+  type: 'BUY' | 'SELL' | 'BURN_REDEEM' | 'REAL_YIELD';
+  metadata?: Record<string, any>;
+}
+
+export interface RedemptionRecord {
+  id: string;
+  timestamp: number;
+  redeemerAddress: string;
+  assetId: number;
+  assetName: string;
+  optionId: string;
+  unitsBurned: number;
+  realWorldItem: string;
+  status: 'CONFIRMED' | 'DISPATCHED' | 'DELIVERED';
+  trackingHash: string;
 }
 
 export interface LeaderboardEntry {
@@ -62,3 +83,17 @@ export interface SellRequest {
   sellerAddress: string;
   sharesCount?: number;
 }
+
+export interface BurnRedeemRequest {
+  assetId: number;
+  redeemerAddress: string;
+  unitsToBurn: number;
+  optionId: string;
+  itemTitle?: string;
+}
+
+export interface RealYieldRequest {
+  assetId: number;
+  amountMon?: number;
+}
+

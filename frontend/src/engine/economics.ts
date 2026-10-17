@@ -26,6 +26,32 @@ export interface PricePoint {
   supply: number;
 }
 
+export interface RedeemOption {
+  id: string;
+  assetId: AssetId;
+  title: string;
+  description: string;
+  requiredUnits: bigint;
+  realWorldItem: string;
+  badge: string;
+  estimatedDelivery: string;
+}
+
+export interface RedemptionRecord {
+  id: string; // DEMO-REDEEM-XXXX o 0xREDEEM-XXXX
+  timestamp: number;
+  participantId: string;
+  participantName: string;
+  assetId: AssetId;
+  assetName: string;
+  optionId: string;
+  optionTitle: string;
+  unitsBurned: bigint;
+  realWorldItem: string;
+  status: 'CONFIRMED' | 'DISPATCHED' | 'DELIVERED';
+  trackingHash: string;
+}
+
 export interface AssetState {
   id: AssetId;
   name: string;
@@ -40,7 +66,55 @@ export interface AssetState {
   rewardPool: bigint;
   initialPrice: bigint;
   priceHistory: PricePoint[];
+  totalBurnedUnits: bigint;        // Histórico de unidades quemadas/redimidas
+  businessRevenueInjected: bigint; // Total de MON inyectado por ventas del negocio real
+  rwaBacking: string;              // Descripción del respaldo físico
+  monthlyYieldTarget: bigint;      // Rendimiento mensual estimado en WAD
+  yieldSource: string;             // Fuente del flujo de caja
 }
+
+export const REDEEM_OPTIONS: Record<AssetId, RedeemOption> = {
+  'cafe-montana-dorada': {
+    id: 'redeem-montana-honey',
+    assetId: 'cafe-montana-dorada',
+    title: 'Bolsa 500g Café Especial Honey',
+    description: '1 Bolsa de 500g de Café Especial Honey de exportación con trazabilidad on-chain y despacho a domicilio.',
+    requiredUnits: 40n,
+    realWorldItem: 'Bolsa 500g Café Especial Honey (Antioquia Export)',
+    badge: 'Cosecha Selección 2026',
+    estimatedDelivery: '3-5 días hábiles a Colombia / 7-10 días internacional',
+  },
+  'cafe-volcan-rojo': {
+    id: 'redeem-volcan-kit',
+    assetId: 'cafe-volcan-rojo',
+    title: 'Kit Barista Volcánico + Tueste Experimental',
+    description: '1 Kit Barista de Origen Volcánico + Muestra de Tueste Experimental de alta especialidad.',
+    requiredUnits: 60n,
+    realWorldItem: 'Kit Barista de Origen Volcánico + Muestra Experimental',
+    badge: 'Edición Limitada Volcán',
+    estimatedDelivery: '3-5 días hábiles con empaque presurizado',
+  },
+  'arte-urbano-medellin': {
+    id: 'redeem-arte-print-tour',
+    assetId: 'arte-urbano-medellin',
+    title: 'Lámina Seriada + Tour VIP Comuna 13',
+    description: '1 Lámina de Colección Seriada y Firmada por el Artista + Tour VIP Guiado por los murales icónicos.',
+    requiredUnits: 75n,
+    realWorldItem: 'Lámina de Colección Seriada y Firmada + Tour VIP',
+    badge: 'Certificado de Autenticidad NFT/Físico',
+    estimatedDelivery: 'Certificado digital instantáneo + Despacho de lámina en 5 días',
+  },
+  'local-genesis': {
+    id: 'redeem-local-vip-pass',
+    assetId: 'local-genesis',
+    title: 'Pase Coworking VIP + Eventos Web3',
+    description: '1 Pase Mensual VIP de Coworking / Acceso Preferencial a Eventos Web3 en el Hub Medellín.',
+    requiredUnits: 100n,
+    realWorldItem: 'Pase Mensual VIP Coworking + Acceso Exclusivo a Eventos Web3',
+    badge: 'Membresía Keycard Genesis',
+    estimatedDelivery: 'Acceso digital inmediato mediante firma de wallet',
+  },
+};
 
 export interface Participant {
   id: string;
@@ -191,6 +265,39 @@ export function quoteSell(asset: AssetState, units: bigint): TradeQuote {
 }
 
 /**
+ * Quema de unidades para canje físico (Burn-to-Redeem).
+ * Reduce totalSupply del activo y la tenencia del usuario sin perjudicar la reserva líquida.
+ */
+export function burnToRedeem(
+  asset: AssetState,
+  participantUnits: bigint,
+  unitsToBurn: bigint
+): { updatedAsset: AssetState; remainingUnits: bigint } {
+  if (unitsToBurn <= 0n) {
+    throw new Error('La cantidad de unidades a quemar debe ser mayor a 0.');
+  }
+  if (participantUnits < unitsToBurn) {
+    throw new Error(
+      `Saldo insuficiente para redimir: posees ${participantUnits.toString()} u. y requieres ${unitsToBurn.toString()} u.`
+    );
+  }
+  if (asset.totalSupply < unitsToBurn) {
+    throw new Error('Error de suministro: el activo no cuenta con suficientes unidades en circulación.');
+  }
+
+  const updatedAsset: AssetState = {
+    ...asset,
+    totalSupply: asset.totalSupply - unitsToBurn,
+    totalBurnedUnits: asset.totalBurnedUnits + unitsToBurn,
+  };
+
+  return {
+    updatedAsset,
+    remainingUnits: participantUnits - unitsToBurn,
+  };
+}
+
+/**
  * Formatea un valor BigInt (WAD 10^18) a string legible sin perder precisión contable
  */
 export function formatCurrency(value: bigint, decimals = 2): string {
@@ -223,6 +330,9 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
     color: string;
     p0: bigint;
     slope: bigint;
+    rwaBacking: string;
+    monthlyYieldTarget: bigint;
+    yieldSource: string;
   }> = [
     {
       id: 'cafe-montana-dorada',
@@ -232,6 +342,9 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
       color: '#10b981', // Verde neón
       p0: 12n * WAD,
       slope: (15n * WAD) / 100n, // +0.15 MON por unidad
+      rwaBacking: 'Bolsa 500g Café Especial Honey',
+      monthlyYieldTarget: 150n * WAD,
+      yieldSource: 'Liquidación mensual de cosechas de exportación (+150 MON)',
     },
     {
       id: 'cafe-volcan-rojo',
@@ -241,6 +354,9 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
       color: '#f97316', // Naranja alerta/energía
       p0: 15n * WAD,
       slope: (22n * WAD) / 100n, // +0.22 MON por unidad
+      rwaBacking: 'Kit Barista Origen Volcánico',
+      monthlyYieldTarget: 220n * WAD,
+      yieldSource: 'Ventas en tiendas aliadas y micro-lotes especiales (+220 MON)',
     },
     {
       id: 'arte-urbano-medellin',
@@ -250,6 +366,9 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
       color: '#8b5cf6', // Violeta eléctrico
       p0: 18n * WAD,
       slope: (25n * WAD) / 100n, // +0.25 MON por unidad
+      rwaBacking: 'Lámina Seriada + Tour VIP Comuna 13',
+      monthlyYieldTarget: 300n * WAD,
+      yieldSource: 'Licencias de uso de imagen de murales para publicidad (+300 MON)',
     },
     {
       id: 'local-genesis',
@@ -259,6 +378,9 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
       color: '#3b82f6', // Azul digital
       p0: 25n * WAD,
       slope: (35n * WAD) / 100n, // +0.35 MON por unidad
+      rwaBacking: 'Pase Mensual Coworking VIP',
+      monthlyYieldTarget: 450n * WAD,
+      yieldSource: 'Recaudo mensual de arrendamiento comercial y barra (+450 MON)',
     },
   ];
 
@@ -278,6 +400,11 @@ export function createInitialAssets(): Record<AssetId, AssetState> {
       rewardPool: 0n,
       initialPrice: c.p0,
       priceHistory: [{ tick: 0, timestamp: 'Inicio', price: wadToNumber(c.p0), supply: 0 }],
+      totalBurnedUnits: 0n,
+      businessRevenueInjected: 0n,
+      rwaBacking: c.rwaBacking,
+      monthlyYieldTarget: c.monthlyYieldTarget,
+      yieldSource: c.yieldSource,
     };
   }
   return assets;

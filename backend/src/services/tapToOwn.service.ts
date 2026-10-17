@@ -1,92 +1,123 @@
 import { Response } from "express";
 import { ethers } from "ethers";
-import { CoffeeAsset, Shareholder, TapEvent, LeaderboardEntry } from "../types/tapToOwn.js";
+import { CoffeeAsset, Shareholder, TapEvent, LeaderboardEntry, RedemptionRecord } from "../types/tapToOwn.js";
 import { calculateBuyCost, calculateSellRefund, getNextSharePrice } from "./bondingCurve.js";
 import { config } from "../config.js";
 
 class TapToOwnService {
-  // 4 Activos de Café de Especialidad RWA Tokenizados
+  // 4 Activos RWA Tokenizados en Monad
   private assets: CoffeeAsset[] = [
     {
       id: 0,
-      name: "Lote Geisha Imperial",
-      variety: "Geisha de Altura",
-      origin: "Pitalito, Huila",
+      slug: "cafe-montana-dorada",
+      name: "Café Montaña Dorada",
+      category: "Commodities Agro / Antioquia",
+      variety: "Geisha Honey de Exportación",
+      origin: "Jardín & Andes, Antioquia",
       altitude: "1,950 msnm",
-      notes: ["Jazmín", "Melocotón", "Bergamota"],
+      notes: ["Jazmín", "Miel de Azahar", "Cítricos"],
       totalShares: 1000,
       soldShares: 145,
       basePrice: 0.001, // en MON
-      priceSlope: 0.00002,
-      currentPrice: 0.0039,
-      patron: "0x71C...a49B",
+      priceSlope: 0.00005,
+      currentPrice: 0.00825,
+      patron: "0x71C8A329...a49B",
       patronShares: 42,
       dividendPool: 0.0284,
       totalVolume: 0.568,
       color: "#FFB800", // Oro
       accentColor: "#FFF0B3",
+      totalBurnedUnits: 0,
+      businessRevenueInjected: 0,
+      rwaBacking: "1 Bolsa de 500g Café Especial Honey por cada 40 unidades quemadas",
+      monthlyYieldTarget: 150,
+      yieldSource: "Liquidación mensual de cosechas de exportación",
     },
     {
       id: 1,
-      name: "Lote Bourbon Rosado",
-      variety: "Bourbon Rosado Fermentado",
-      origin: "Acevedo, Huila",
+      slug: "cafe-volcan-rojo",
+      name: "Café Volcán Rojo",
+      category: "Café de Suelo Volcánico / Alta Especialidad",
+      variety: "Bourbon Rosado Fermentado Volcánico",
+      origin: "Acevedo & Nevado, Huila",
       altitude: "1,800 msnm",
       notes: ["Frutos Rojos", "Caña de Azúcar", "Cacao"],
       totalShares: 1000,
       soldShares: 210,
-      basePrice: 0.0008,
-      priceSlope: 0.000015,
-      currentPrice: 0.00395,
-      patron: "0x34B...F921",
+      basePrice: 0.0015,
+      priceSlope: 0.00008,
+      currentPrice: 0.0183,
+      patron: "0x34BF9120...F921",
       patronShares: 60,
       dividendPool: 0.0415,
       totalVolume: 0.830,
       color: "#FF4D8B", // Rosado / Rubí
       accentColor: "#FFD6E7",
+      totalBurnedUnits: 0,
+      businessRevenueInjected: 0,
+      rwaBacking: "1 Kit Barista de Origen Volcánico por cada 60 unidades quemadas",
+      monthlyYieldTarget: 220,
+      yieldSource: "Ventas en tiendas aliadas y micro-lotes especiales",
     },
     {
       id: 2,
-      name: "Lote Caturra Miel",
-      variety: "Caturra Honey Process",
-      origin: "Génova, Quindío",
-      altitude: "1,700 msnm",
-      notes: ["Miel Silvestre", "Mandarina", "Vainilla"],
+      slug: "arte-urbano-medellin",
+      name: "Arte Urbano Medellín",
+      category: "Cultura, Muralismo Comuna 13 & Derechos de Autor",
+      variety: "Colección Seriadas & Derechos Murales",
+      origin: "Comuna 13, Medellín",
+      altitude: "1,550 msnm",
+      notes: ["Muralismo", "Street Art", "Regalías"],
       totalShares: 1000,
       soldShares: 90,
-      basePrice: 0.0005,
-      priceSlope: 0.00001,
-      currentPrice: 0.0014,
-      patron: "0x89D...71E3",
+      basePrice: 0.0008,
+      priceSlope: 0.00004,
+      currentPrice: 0.0044,
+      patron: "0x89D71C82...71E3",
       patronShares: 25,
       dividendPool: 0.0112,
       totalVolume: 0.224,
       color: "#00E5FF", // Cyan Eléctrico
       accentColor: "#CCF9FF",
+      totalBurnedUnits: 0,
+      businessRevenueInjected: 0,
+      rwaBacking: "1 Lámina Seriada Firmada + Tour VIP por cada 75 unidades quemadas",
+      monthlyYieldTarget: 300,
+      yieldSource: "Cobro de licencias publicitarias y merchandising de murales",
     },
     {
       id: 3,
-      name: "Lote Castillo Ancestral",
-      variety: "Castillo Orgánico",
-      origin: "Jerifalte, Nariño",
-      altitude: "2,050 msnm",
-      notes: ["Panela", "Cítricos Brillantes", "Nuez"],
+      slug: "local-genesis",
+      name: "Local Genesis",
+      category: "Real Estate Comercial / Hub Web3 Medellín",
+      variety: "Inmueble Comercial & Espacios Coworking",
+      origin: "El Poblado, Medellín",
+      altitude: "1,600 msnm",
+      notes: ["Coworking", "Eventos Web3", "Barra Café"],
       totalShares: 1000,
       soldShares: 65,
-      basePrice: 0.0004,
-      priceSlope: 0.00001,
-      currentPrice: 0.00105,
-      patron: "0x52A...c904",
+      basePrice: 0.001,
+      priceSlope: 0.00006,
+      currentPrice: 0.0049,
+      patron: "0x52Ac948B...c904",
       patronShares: 18,
       dividendPool: 0.0078,
       totalVolume: 0.156,
       color: "#00E676", // Verde Esmeralda
       accentColor: "#B9F6CA",
+      totalBurnedUnits: 0,
+      businessRevenueInjected: 0,
+      rwaBacking: "1 Pase Mensual VIP Coworking por cada 100 unidades quemadas",
+      monthlyYieldTarget: 450,
+      yieldSource: "Arrendamiento comercial y consumo en barra del Hub",
     },
   ];
 
   // Registro de accionistas por [assetId][address]
   private shareholders: Map<number, Map<string, Shareholder>> = new Map();
+
+  // Historial de Redenciones Físicas RWA
+  private redemptions: RedemptionRecord[] = [];
 
   // Historial de Taps recientes
   private recentEvents: TapEvent[] = [];
@@ -411,6 +442,185 @@ class TapToOwnService {
     res.on("close", () => {
       this.sseClients = this.sseClients.filter((client) => client !== res);
     });
+  }
+
+  /**
+   * Quemar acciones para canjear un producto físico RWA (Burn-to-Redeem)
+   */
+  public burnToRedeem(
+    assetId: number,
+    redeemerAddress: string,
+    unitsToBurn: number,
+    optionId: string,
+    realWorldItemTitle?: string
+  ): { success: boolean; redemption?: RedemptionRecord; error?: string } {
+    const asset = this.assets.find((a) => a.id === assetId);
+    if (!asset) {
+      return { success: false, error: "Activo RWA no encontrado" };
+    }
+
+    if (unitsToBurn <= 0) {
+      return { success: false, error: "La cantidad de unidades a quemar debe ser mayor a 0" };
+    }
+
+    const lotHolders = this.shareholders.get(assetId)!;
+    const holder = lotHolders.get(redeemerAddress);
+
+    if (!holder || holder.shares < unitsToBurn) {
+      return {
+        success: false,
+        error: `Acciones insuficientes para redención. Tienes ${holder ? holder.shares : 0} y requieres ${unitsToBurn}`,
+      };
+    }
+
+    // 1. Reducir tenencia del usuario
+    holder.shares -= unitsToBurn;
+    if (holder.shares === 0) {
+      lotHolders.delete(redeemerAddress);
+    }
+
+    // 2. Reducir suministro circulante y aumentar histórico quemado
+    asset.soldShares -= unitsToBurn;
+    asset.totalBurnedUnits += unitsToBurn;
+    asset.currentPrice = getNextSharePrice(asset.basePrice, asset.priceSlope, asset.soldShares);
+
+    // 3. Recalcular líder (Patrón) si el que quemó era el líder
+    if (asset.patron === redeemerAddress) {
+      let maxShares = 0;
+      let newPatron = "Sin Patrón";
+      for (const [addr, h] of lotHolders.entries()) {
+        if (h.shares > maxShares) {
+          maxShares = h.shares;
+          newPatron = addr;
+        }
+      }
+      asset.patron = newPatron;
+      asset.patronShares = maxShares;
+    }
+
+    // 4. Generar identificador de redención y tracking hash
+    const redeemIndex = (this.redemptions.length + 1).toString().padStart(4, "0");
+    const isTestnet = redeemerAddress.startsWith("0x");
+    const redeemId = isTestnet ? `0xREDEEM-${redeemIndex}` : `DEMO-REDEEM-${redeemIndex}`;
+    const trackingHash = "0x" + Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+
+    const itemDesc = realWorldItemTitle || asset.rwaBacking;
+
+    const record: RedemptionRecord = {
+      id: redeemId,
+      timestamp: Date.now(),
+      redeemerAddress,
+      assetId,
+      assetName: asset.name,
+      optionId,
+      unitsBurned: unitsToBurn,
+      realWorldItem: itemDesc,
+      status: "CONFIRMED",
+      trackingHash,
+    };
+
+    this.redemptions.unshift(record);
+
+    const burnEvent: TapEvent = {
+      id: `burn-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      assetId,
+      assetName: asset.name,
+      buyer: redeemerAddress,
+      shares: unitsToBurn,
+      pricePerShare: 0,
+      totalCost: 0,
+      dividendDistributed: 0,
+      timestamp: Date.now(),
+      isNewPatron: false,
+      type: "BURN_REDEEM",
+      metadata: {
+        redeemId,
+        realWorldItem: itemDesc,
+        trackingHash,
+      },
+    };
+
+    this.recentEvents.unshift(burnEvent);
+    if (this.recentEvents.length > 50) this.recentEvents.pop();
+
+    this.broadcastSSE({
+      type: "BURN_REDEEM_EXECUTED",
+      event: burnEvent,
+      redemption: record,
+      asset: this.getAssetById(assetId),
+    });
+
+    return { success: true, redemption: record };
+  }
+
+  /**
+   * Inyectar flujo de caja real del negocio físico (Real Yield)
+   */
+  public injectRealYield(
+    assetId: number,
+    amountMon?: number
+  ): { success: boolean; amountInjected: number; affectedHolders: number; error?: string } {
+    const asset = this.assets.find((a) => a.id === assetId);
+    if (!asset) {
+      return { success: false, amountInjected: 0, affectedHolders: 0, error: "Activo RWA no encontrado" };
+    }
+
+    const amount = amountMon !== undefined && amountMon > 0 ? amountMon : asset.monthlyYieldTarget;
+    asset.dividendPool = Number((asset.dividendPool + amount).toFixed(6));
+    asset.businessRevenueInjected = Number((asset.businessRevenueInjected + amount).toFixed(6));
+
+    const lotHolders = this.shareholders.get(assetId)!;
+    let affectedHolders = 0;
+
+    if (asset.soldShares > 0) {
+      for (const holder of lotHolders.values()) {
+        const shareRatio = holder.shares / asset.soldShares;
+        const holderShare = Number((amount * shareRatio).toFixed(6));
+        holder.unclaimedDividends = Number((holder.unclaimedDividends + holderShare).toFixed(6));
+        affectedHolders++;
+      }
+    }
+
+    const yieldEvent: TapEvent = {
+      id: `yield-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      assetId,
+      assetName: asset.name,
+      buyer: "PHYSICAL_BUSINESS_REVENUE",
+      shares: 0,
+      pricePerShare: 0,
+      totalCost: amount,
+      dividendDistributed: amount,
+      timestamp: Date.now(),
+      isNewPatron: false,
+      type: "REAL_YIELD",
+      metadata: {
+        yieldSource: asset.yieldSource,
+        amountInjectedMon: amount,
+        affectedHolders,
+      },
+    };
+
+    this.recentEvents.unshift(yieldEvent);
+    if (this.recentEvents.length > 50) this.recentEvents.pop();
+
+    this.broadcastSSE({
+      type: "REAL_YIELD_INJECTED",
+      event: yieldEvent,
+      asset: this.getAssetById(assetId),
+      amountInjected: amount,
+      affectedHolders,
+    });
+
+    return { success: true, amountInjected: amount, affectedHolders };
+  }
+
+  /**
+   * Obtener lista de redenciones físicas
+   */
+  public getRedemptions(address?: string): RedemptionRecord[] {
+    if (!address) return this.redemptions;
+    const lower = address.toLowerCase();
+    return this.redemptions.filter((r) => r.redeemerAddress.toLowerCase() === lower);
   }
 
   private broadcastSSE(data: any) {

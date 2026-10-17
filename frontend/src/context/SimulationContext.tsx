@@ -5,6 +5,7 @@ import type {
   AssetState,
   Participant,
   TradeRecord,
+  RedemptionRecord,
 } from '../engine/economics';
 import {
   MAX_SUPPLY,
@@ -13,16 +14,33 @@ import {
   createInitialParticipants,
   quoteBuy,
   quoteSell,
+  burnToRedeem,
+  REDEEM_OPTIONS,
   getSpotPrice,
   wadToNumber,
   formatCurrency,
 } from '../engine/economics';
+import {
+  backendApi,
+  BackendTapEvent,
+  BackendLeaderboardEntry,
+  ContractInfo,
+} from '../services/backendApi';
 
 export type NetworkMode = 'DEMO' | 'MONAD_TESTNET';
 
 export interface GameNotification {
   id: string;
-  type: 'LEADER_CHANGE' | 'MAJORITY_CONQUEST' | 'TRADE_SUCCESS' | 'TRADE_ERROR' | 'CAPACITY_ALERT' | 'REWARD_CLAIM' | 'WALLET_CONNECTED';
+  type:
+    | 'LEADER_CHANGE'
+    | 'MAJORITY_CONQUEST'
+    | 'TRADE_SUCCESS'
+    | 'TRADE_ERROR'
+    | 'CAPACITY_ALERT'
+    | 'REWARD_CLAIM'
+    | 'WALLET_CONNECTED'
+    | 'BURN_REDEEM'
+    | 'REAL_YIELD_INJECTION';
   title: string;
   message: string;
   assetId?: AssetId;
@@ -47,6 +65,7 @@ interface SimulationContextType {
   trades: TradeRecord[];
   leaders: Record<AssetId, string | null>;
   notifications: GameNotification[];
+  redemptions: RedemptionRecord[];
   majorityCelebration: { assetName: string; winnerName: string; units: number } | null;
   dismissCelebration: () => void;
   executeTrade: (
@@ -56,9 +75,28 @@ interface SimulationContextType {
     units: bigint
   ) => { ok: boolean; error?: string; txId?: string };
   claimHumanRewards: () => void;
+  executeBurnRedeem: (
+    assetId: AssetId,
+    optionId: string
+  ) => { ok: boolean; error?: string; redeemId?: string };
+  injectBusinessRealYield: (
+    assetId: AssetId,
+    amountMonWei?: bigint
+  ) => { ok: boolean; amountInjected: bigint; affectedHolders: number };
   triggerCompetitiveBattle: (targetAssetId?: AssetId) => void;
   resetSimulation: () => void;
   exportDemoResults: () => void;
+
+  // Integración Backend Monad
+  backendOnline: boolean;
+  sseConnected: boolean;
+  contractInfo: ContractInfo | null;
+  authSession: { token: string; address: string } | null;
+  authenticateWalletWithMonad: () => Promise<boolean>;
+  logoutAuthSession: () => void;
+  backendEvents: BackendTapEvent[];
+  backendLeaderboard: BackendLeaderboardEntry[];
+  refreshBackendData: () => Promise<void>;
 }
 
 const SimulationContext = createContext<SimulationContextType | null>(null);
@@ -84,17 +122,34 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     'local-genesis': null,
   });
   const [notifications, setNotifications] = useState<GameNotification[]>([]);
+  const [redemptions, setRedemptions] = useState<RedemptionRecord[]>([]);
   const [majorityCelebration, setMajorityCelebration] = useState<{
     assetName: string;
     winnerName: string;
     units: number;
   } | null>(null);
 
+  // Estados de Integración con el Backend Monad
+  const [backendOnline, setBackendOnline] = useState<boolean>(false);
+  const [sseConnected, setSseConnected] = useState<boolean>(false);
+  const [contractInfo, setContractInfo] = useState<ContractInfo | null>(null);
+  const [authSession, setAuthSession] = useState<{ token: string; address: string } | null>(() => {
+    try {
+      const stored = localStorage.getItem('monad_auth_session');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [backendEvents, setBackendEvents] = useState<BackendTapEvent[]>([]);
+  const [backendLeaderboard, setBackendLeaderboard] = useState<BackendLeaderboardEntry[]>([]);
+
   const txCounterRef = useRef<number>(1);
-  const stateRef = useRef({ assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress });
+  const redemptionsCounterRef = useRef<number>(1);
+  const stateRef = useRef({ assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress, authSession });
   useEffect(() => {
-    stateRef.current = { assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress };
-  }, [assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress]);
+    stateRef.current = { assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress, authSession };
+  }, [assets, participants, leaders, hotAssetId, tickCount, mode, walletAddress, authSession]);
 
   const pushNotification = useCallback(
     (notif: Omit<GameNotification, 'id' | 'timestamp'>) => {
@@ -107,6 +162,130 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
     []
   );
+
+  // Consultar datos vivos del backend y contrato
+  const refreshBackendData = useCallback(async () => {
+    try {
+      const health = await backendApi.checkHealth();
+      if (health && health.status === 'ok') {
+        setBackendOnline(true);
+      }
+      const cInfo = await backendApi.getContractInfo();
+      if (cInfo && cInfo.success) {
+        setContractInfo(cInfo);
+      }
+      const lb = await backendApi.getLeaderboard();
+      if (lb && lb.success) {
+        setBackendLeaderboard(lb.data);
+      }
+      const evts = await backendApi.getRecentEvents();
+      if (evts && evts.success) {
+        setBackendEvents(evts.data);
+      }
+    } catch {
+      // Backend desconectado o en inicialización
+    }
+  }, []);
+
+  // Conectar con el Stream Server-Sent Events (SSE) del Backend (< 300ms)
+  useEffect(() => {
+    refreshBackendData();
+
+    let sseConn: { close: () => void } | null = null;
+    try {
+      sseConn = backendApi.connectSSE(
+        (data: any) => {
+          setSseConnected(true);
+          setBackendOnline(true);
+          if (data.type === 'INITIAL_STATE') {
+            if (data.leaderboard) setBackendLeaderboard(data.leaderboard);
+            if (data.recentEvents) setBackendEvents(data.recentEvents);
+          } else if (data.type === 'TAP_EXECUTED' && data.event) {
+            setBackendEvents((prev) => [data.event, ...prev.slice(0, 49)]);
+            if (data.event.isNewPatron) {
+              pushNotification({
+                type: 'LEADER_CHANGE',
+                title: '⚡ Cambio de Patrón (SSE en Vivo)',
+                message: `${data.event.buyer.slice(0, 8)}... ahora lidera ${data.event.assetName}!`,
+              });
+            }
+          } else if (data.type === 'REAL_YIELD_INJECTED' && data.event) {
+            setBackendEvents((prev) => [data.event, ...prev.slice(0, 49)]);
+          } else if (data.type === 'BURN_REDEEM_EXECUTED' && data.event) {
+            setBackendEvents((prev) => [data.event, ...prev.slice(0, 49)]);
+          }
+        },
+        () => {
+          setSseConnected(false);
+        }
+      );
+    } catch {
+      // Error silencioso si no hay stream activo
+    }
+
+    const interval = setInterval(() => {
+      refreshBackendData();
+    }, 15000);
+
+    return () => {
+      clearInterval(interval);
+      sseConn?.close();
+    };
+  }, [pushNotification, refreshBackendData]);
+
+  // Autenticación SIWE con Monad Testnet
+  const authenticateWalletWithMonad = useCallback(async (): Promise<boolean> => {
+    const rawAddr = walletAddress || stateRef.current.walletAddress;
+    if (!rawAddr || !rawAddr.startsWith('0x')) {
+      alert('Conecta primero tu wallet de Monad Testnet.');
+      return false;
+    }
+
+    try {
+      const challengeRes = await backendApi.requestAuthChallenge(rawAddr);
+      if (!challengeRes.success || !challengeRes.data) {
+        throw new Error('No se pudo generar el reto de autenticación SIWE.');
+      }
+
+      const signature = await (window as any).ethereum.request({
+        method: 'personal_sign',
+        params: [challengeRes.data.message, rawAddr],
+      });
+
+      const verifyRes = await backendApi.verifyAuthSignature(rawAddr, signature);
+      if (verifyRes.success && verifyRes.sessionToken) {
+        const session = { token: verifyRes.sessionToken, address: rawAddr };
+        setAuthSession(session);
+        localStorage.setItem('monad_auth_session', JSON.stringify(session));
+        pushNotification({
+          type: 'WALLET_CONNECTED',
+          title: '¡Sesión Monad Testnet Autenticada!',
+          message: `Firma SIWE verificada con éxito para ${rawAddr.slice(0, 6)}...${rawAddr.slice(-4)}. Token de sesión backend emitido.`,
+        });
+        return true;
+      } else {
+        throw new Error(verifyRes.message || 'Firma no validada.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      pushNotification({
+        type: 'TRADE_ERROR',
+        title: 'Error de Autenticación SIWE',
+        message: err?.message || 'Firma cancelada por el usuario.',
+      });
+      return false;
+    }
+  }, [walletAddress, pushNotification]);
+
+  const logoutAuthSession = useCallback(() => {
+    setAuthSession(null);
+    localStorage.removeItem('monad_auth_session');
+    pushNotification({
+      type: 'WALLET_CONNECTED',
+      title: 'Sesión Cerrada',
+      message: 'Se ha cerrado la sesión autenticada con el backend de Monad.',
+    });
+  }, [pushNotification]);
 
   // Conexión real de Wallet para Monad Testnet (Monad Blitz)
   const connectWallet = async () => {
@@ -336,6 +515,29 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             message: `${units.toString()} u. de ${asset.name} por ${formatCurrency(quote.netTotal)}.`,
             assetId,
           });
+
+          // Sincronización asíncrona con el backend en puerto 3000
+          const assetIndexMap: Record<AssetId, number> = {
+            'cafe-montana-dorada': 0,
+            'cafe-volcan-rojo': 1,
+            'arte-urbano-medellin': 2,
+            'local-genesis': 3,
+          };
+          const buyerAddr = stateRef.current.walletAddress || '0xHUMAN_PLAYER_001';
+          if (type === 'BUY') {
+            backendApi
+              .tapToBuy(
+                assetIndexMap[assetId],
+                buyerAddr,
+                Number(units),
+                stateRef.current.authSession?.token
+              )
+              .catch(() => {});
+          } else {
+            backendApi
+              .tapToSell(assetIndexMap[assetId], buyerAddr, Number(units))
+              .catch(() => {});
+          }
         }
 
         stateRef.current.assets = currentAssets;
@@ -484,8 +686,196 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     [executeTrade, pushNotification]
   );
 
+  const executeBurnRedeem = useCallback(
+    (assetId: AssetId, optionId: string): { ok: boolean; error?: string; redeemId?: string } => {
+      const currentAssets = { ...stateRef.current.assets };
+      const currentParticipants = { ...stateRef.current.participants };
+
+      const asset = { ...currentAssets[assetId] };
+      const trader = {
+        ...currentParticipants['HUMAN'],
+        holdings: { ...currentParticipants['HUMAN'].holdings },
+        costBasis: { ...currentParticipants['HUMAN'].costBasis },
+        badges: [...currentParticipants['HUMAN'].badges],
+      };
+
+      const option = REDEEM_OPTIONS[assetId];
+      if (!option || option.id !== optionId) {
+        return { ok: false, error: 'Opción de redención inválida para este activo.' };
+      }
+
+      if (trader.holdings[assetId] < option.requiredUnits) {
+        const error = `Saldo insuficiente: requieres ${option.requiredUnits.toString()} unidades y posees ${trader.holdings[assetId].toString()} u.`;
+        pushNotification({
+          type: 'TRADE_ERROR',
+          title: 'Redención Rechazada',
+          message: error,
+          assetId,
+        });
+        return { ok: false, error };
+      }
+
+      try {
+        const { updatedAsset, remainingUnits } = burnToRedeem(
+          asset,
+          trader.holdings[assetId],
+          option.requiredUnits
+        );
+
+        // Ajustar el costo base proporcional a las unidades restantes
+        if (trader.holdings[assetId] > 0n) {
+          trader.costBasis[assetId] =
+            (trader.costBasis[assetId] * remainingUnits) / trader.holdings[assetId];
+        }
+        trader.holdings[assetId] = remainingUnits;
+
+        // Añadir insignia RWA si no la tiene
+        const rwaBadge = `Redentor RWA: ${asset.name}`;
+        if (!trader.badges.includes(rwaBadge)) {
+          trader.badges = [...trader.badges, rwaBadge];
+        }
+
+        const redeemSeq = redemptionsCounterRef.current++;
+        const redeemId = stateRef.current.walletAddress
+          ? `0xREDEEM-${redeemSeq.toString().padStart(4, '0')}`
+          : `DEMO-REDEEM-${redeemSeq.toString().padStart(4, '0')}`;
+
+        const trackingHash = `0x${Array.from({ length: 16 }, () =>
+          Math.floor(Math.random() * 16).toString(16)
+        ).join('')}`;
+
+        const record: RedemptionRecord = {
+          id: redeemId,
+          timestamp: Date.now(),
+          participantId: trader.id,
+          participantName: trader.name,
+          assetId,
+          assetName: asset.name,
+          optionId: option.id,
+          optionTitle: option.title,
+          unitsBurned: option.requiredUnits,
+          realWorldItem: option.realWorldItem,
+          status: 'CONFIRMED',
+          trackingHash,
+        };
+
+        currentAssets[assetId] = updatedAsset;
+        currentParticipants['HUMAN'] = trader;
+
+        stateRef.current.assets = currentAssets;
+        stateRef.current.participants = currentParticipants;
+
+        setAssets(currentAssets);
+        setParticipants(currentParticipants);
+        setRedemptions((prev) => [record, ...prev]);
+
+        pushNotification({
+          type: 'BURN_REDEEM',
+          title: '¡Redención Física Confirmada!',
+          message: `Has quemado ${option.requiredUnits.toString()} u. de ${asset.name} para canjear "${option.realWorldItem}". ID: ${redeemId}`,
+          assetId,
+        });
+
+        // Sincronización con backend en puerto 3000
+        const assetIndexMap: Record<AssetId, number> = {
+          'cafe-montana-dorada': 0,
+          'cafe-volcan-rojo': 1,
+          'arte-urbano-medellin': 2,
+          'local-genesis': 3,
+        };
+        const redeemerAddr = stateRef.current.walletAddress || '0xHUMAN_PLAYER_001';
+        backendApi
+          .burnToRedeem(
+            assetIndexMap[assetId],
+            redeemerAddr,
+            Number(option.requiredUnits),
+            option.id,
+            option.realWorldItem,
+            stateRef.current.authSession?.token
+          )
+          .catch(() => {});
+
+        return { ok: true, redeemId };
+      } catch (err: any) {
+        const error = err?.message || 'Error al procesar la redención.';
+        pushNotification({
+          type: 'TRADE_ERROR',
+          title: 'Error de Redención',
+          message: error,
+          assetId,
+        });
+        return { ok: false, error };
+      }
+    },
+    [pushNotification]
+  );
+
+  const injectBusinessRealYield = useCallback(
+    (assetId: AssetId, amountMonWei?: bigint): { ok: boolean; amountInjected: bigint; affectedHolders: number } => {
+      const currentAssets = { ...stateRef.current.assets };
+      const currentParticipants = { ...stateRef.current.participants };
+
+      const asset = { ...currentAssets[assetId] };
+      const amount = amountMonWei || asset.monthlyYieldTarget;
+
+      if (amount <= 0n) {
+        return { ok: false, amountInjected: 0n, affectedHolders: 0 };
+      }
+
+      asset.rewardPool += amount;
+      asset.businessRevenueInjected += amount;
+
+      let affectedHolders = 0;
+      if (asset.totalSupply > 0n) {
+        for (const pid of Object.keys(currentParticipants)) {
+          const holderUnits = currentParticipants[pid].holdings[assetId];
+          if (holderUnits > 0n) {
+            const share = (amount * holderUnits) / asset.totalSupply;
+            if (share > 0n) {
+              currentParticipants[pid] = {
+                ...currentParticipants[pid],
+                pendingRewards: currentParticipants[pid].pendingRewards + share,
+              };
+              affectedHolders++;
+            }
+          }
+        }
+      }
+
+      currentAssets[assetId] = asset;
+      stateRef.current.assets = currentAssets;
+      stateRef.current.participants = currentParticipants;
+
+      setAssets(currentAssets);
+      setParticipants(currentParticipants);
+
+      pushNotification({
+        type: 'REAL_YIELD_INJECTION',
+        title: `Flujo Real Inyectado: ${asset.name}`,
+        message: `Se inyectaron ${formatCurrency(amount)} de facturación física al Reward Pool repartidos entre ${affectedHolders} accionistas.`,
+        assetId,
+      });
+
+      // Sincronización con backend en puerto 3000
+      const assetIndexMap: Record<AssetId, number> = {
+        'cafe-montana-dorada': 0,
+        'cafe-volcan-rojo': 1,
+        'arte-urbano-medellin': 2,
+        'local-genesis': 3,
+      };
+      const amountMonNum = Number(amount) / 1e18;
+      backendApi
+        .injectRealYield(assetIndexMap[assetId], amountMonNum > 0 ? amountMonNum : undefined)
+        .catch(() => {});
+
+      return { ok: true, amountInjected: amount, affectedHolders };
+    },
+    [pushNotification]
+  );
+
   const resetSimulation = useCallback(() => {
     txCounterRef.current = 1;
+    redemptionsCounterRef.current = 1;
     const freshAssets = createInitialAssets();
     const freshParts = createInitialParticipants();
     const freshLeaders: Record<AssetId, string | null> = {
@@ -499,6 +889,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setParticipants(freshParts);
     setLeaders(freshLeaders);
     setTrades([]);
+    setRedemptions([]);
     setTickCount(0);
     setMajorityCelebration(null);
   }, []);
@@ -510,7 +901,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       assets: Object.values(stateRef.current.assets).map((a) => ({
         name: a.name,
         totalSupply: a.totalSupply.toString(),
+        totalBurnedUnits: a.totalBurnedUnits.toString(),
+        businessRevenueInjected: a.businessRevenueInjected.toString(),
       })),
+      redemptions: stateRef.current.walletAddress ? redemptions : redemptions,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -519,7 +913,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     link.download = `monad-blitz-report-${Date.now()}.json`;
     link.click();
     URL.revokeObjectURL(url);
-  }, []);
+  }, [redemptions]);
 
   return (
     <SimulationContext.Provider
@@ -541,13 +935,27 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         trades,
         leaders,
         notifications,
+        redemptions,
         majorityCelebration,
         dismissCelebration: () => setMajorityCelebration(null),
         executeTrade,
         claimHumanRewards,
+        executeBurnRedeem,
+        injectBusinessRealYield,
         triggerCompetitiveBattle,
         resetSimulation,
         exportDemoResults,
+
+        // Integración Backend
+        backendOnline,
+        sseConnected,
+        contractInfo,
+        authSession,
+        authenticateWalletWithMonad,
+        logoutAuthSession,
+        backendEvents,
+        backendLeaderboard,
+        refreshBackendData,
       }}
     >
       {children}

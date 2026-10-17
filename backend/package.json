@@ -1,6 +1,7 @@
 {
   "name": "monad-hack-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Backend API and service layer for Monad Hackathon project",
   "main": "dist/index.js",
   "scripts": {

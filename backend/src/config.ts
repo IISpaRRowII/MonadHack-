@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 export const config = {
-  port: parseInt(process.env.PORT || "3001", 10),
+  port: parseInt(process.env.PORT || "3000", 10),
   nodeEnv: process.env.NODE_ENV || "development",
   monad: {
     rpcUrl: process.env.MONAD_RPC_URL || "https://testnet-rpc.monad.xyz/",

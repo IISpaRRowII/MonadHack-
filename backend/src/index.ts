@@ -1,10 +1,17 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
+import path from "path";
+import fs from "fs";
 import { ethers } from "ethers";
 import { config } from "./config.js";
 import { tapToOwnRouter } from "./routes/tapToOwn.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { renderDashboardHtml } from "./views/dashboardHtml.js";
+
+// Resolver la ruta a frontend/dist tanto si se ejecuta desde /backend como desde la raíz
+const frontendDistPath = fs.existsSync(path.resolve(process.cwd(), "../frontend/dist"))
+  ? path.resolve(process.cwd(), "../frontend/dist")
+  : path.resolve(process.cwd(), "frontend/dist");
 
 const app = express();
 
@@ -23,21 +30,11 @@ app.use((req: Request, res: Response, next) => {
   next();
 });
 
-// Panel de Control en Vivo para el Backend (Monitor Visual en tiempo real)
-app.get("/", (_req: Request, res: Response) => {
-  res.send(renderDashboardHtml());
-});
-
-app.get("/dashboard", (_req: Request, res: Response) => {
-  res.send(renderDashboardHtml());
-});
-
 // Rutas de Autenticación con Wallet Monad (SIWE - Sign-In with Ethereum/Monad)
 app.use("/api/auth", authRouter);
 
 // Rutas de la lógica de negocio Tap-to-Own RWA
 app.use("/api/tap-to-own", tapToOwnRouter);
-
 
 // Health Check
 app.get("/health", (_req: Request, res: Response) => {
@@ -65,11 +62,38 @@ app.get("/api/monad/block", async (_req: Request, res: Response) => {
   }
 });
 
+// Monitor Visual del Backend (Panel de control para desarrolladores)
+app.get("/monitor", (_req: Request, res: Response) => {
+  res.send(renderDashboardHtml());
+});
+
+app.get("/dashboard", (_req: Request, res: Response) => {
+  res.send(renderDashboardHtml());
+});
+
+// Integración de Frontend: Servir archivos estáticos del build de React
+if (fs.existsSync(frontendDistPath)) {
+  app.use(express.static(frontendDistPath));
+}
+
+// Fallback SPA: Para cualquier ruta web, entregar la App de React
+app.get("*", (req: Request, res: Response, next) => {
+  if (req.path.startsWith("/api") || req.path.startsWith("/health")) {
+    return next();
+  }
+  const indexPath = path.join(frontendDistPath, "index.html");
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  return res.send(renderDashboardHtml());
+});
+
 app.listen(config.port, () => {
   console.log(`====================================================`);
-  console.log(`⚡ Monad Tap-to-Own Backend listo`);
-  console.log(`📡 Servidor:    http://localhost:${config.port}`);
-  console.log(`🖥️  Monitor:     http://localhost:${config.port}/dashboard`);
-  console.log(`⚡ SSE Stream:  http://localhost:${config.port}/api/tap-to-own/stream`);
+  console.log(`⚡ Monad Tap-to-Own: APLICACIÓN COMPLETA INTEGRADA`);
+  console.log(`🌐 Frontend (React):  http://localhost:${config.port}`);
+  console.log(`📡 Backend APIs:     http://localhost:${config.port}/api/tap-to-own/assets`);
+  console.log(`🖥️  Monitor Dev:      http://localhost:${config.port}/monitor`);
+  console.log(`⚡ SSE Stream:       http://localhost:${config.port}/api/tap-to-own/stream`);
   console.log(`====================================================`);
 });

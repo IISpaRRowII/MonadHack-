@@ -132,7 +132,81 @@ tapToOwnRouter.get("/stream", (req: Request, res: Response) => {
   tapToOwnService.addSSEClient(res);
 });
 
-// 9. Información del Contrato Inteligente en Monad
+// 9. Quemar acciones para canjear un producto físico RWA (Burn-to-Redeem)
+tapToOwnRouter.post("/burn-redeem", (req: Request, res: Response) => {
+  const { assetId, unitsToBurn, optionId, itemTitle } = req.body;
+  let redeemerAddress = req.body.redeemerAddress;
+
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.replace("Bearer ", "") || req.body.sessionToken;
+  if (token) {
+    const session = authService.getSession(token);
+    if (session) {
+      redeemerAddress = session.address;
+    }
+  }
+
+  if (assetId === undefined || !redeemerAddress || !unitsToBurn || !optionId) {
+    return res.status(400).json({
+      success: false,
+      error: "Se requieren 'assetId', 'redeemerAddress', 'unitsToBurn' y 'optionId'",
+    });
+  }
+
+  const result = tapToOwnService.burnToRedeem(
+    Number(assetId),
+    String(redeemerAddress),
+    Number(unitsToBurn),
+    String(optionId),
+    itemTitle ? String(itemTitle) : undefined
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ success: false, error: result.error });
+  }
+
+  res.json({
+    success: true,
+    message: `¡Redención física exitosa! Certificado generado: ${result.redemption?.id}`,
+    redemption: result.redemption,
+  });
+});
+
+// 10. Inyectar flujo de caja real del negocio físico (Real Yield)
+tapToOwnRouter.post("/inject-real-yield", (req: Request, res: Response) => {
+  const { assetId, amountMon } = req.body;
+
+  if (assetId === undefined) {
+    return res.status(400).json({
+      success: false,
+      error: "Se requiere 'assetId' (0 a 3)",
+    });
+  }
+
+  const result = tapToOwnService.injectRealYield(
+    Number(assetId),
+    amountMon !== undefined ? Number(amountMon) : undefined
+  );
+
+  if (!result.success) {
+    return res.status(400).json({ success: false, error: result.error });
+  }
+
+  res.json({
+    success: true,
+    message: `¡Flujo de caja inyectado con éxito! +${result.amountInjected} MON repartidos pro-rata entre ${result.affectedHolders} accionistas`,
+    data: result,
+  });
+});
+
+// 11. Lista de Certificados de Redención Física
+tapToOwnRouter.get("/redemptions", (req: Request, res: Response) => {
+  const address = req.query.address as string | undefined;
+  const redemptions = tapToOwnService.getRedemptions(address);
+  res.json({ success: true, data: redemptions, count: redemptions.length });
+});
+
+// 12. Información del Contrato Inteligente en Monad
 tapToOwnRouter.get("/contract-info", (_req: Request, res: Response) => {
   res.json({
     success: true,
@@ -140,6 +214,7 @@ tapToOwnRouter.get("/contract-info", (_req: Request, res: Response) => {
       name: "Monad Testnet",
       chainId: config.monad.chainId,
       rpcUrl: config.monad.rpcUrl,
+      blockExplorer: "https://testnet.monadexplorer.com/",
     },
     contract: {
       address: config.monad.contractAddress || "Aún no desplegado (Modo simulación en memoria activo)",
@@ -157,3 +232,4 @@ tapToOwnRouter.get("/contract-info", (_req: Request, res: Response) => {
     ],
   });
 });
+

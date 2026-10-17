@@ -4,6 +4,7 @@ import {
   createInitialAssets,
   quoteBuy,
   quoteSell,
+  burnToRedeem,
 } from './economics';
 
 describe('Motor Económico BigInt — Tap-to-Own', () => {
@@ -44,5 +45,41 @@ describe('Motor Económico BigInt — Tap-to-Own', () => {
 
     expect(buyQuote.baseValue).toBe(sellQuote.baseValue);
     expect(sellQuote.netTotal < buyQuote.netTotal).toBe(true);
+  });
+
+  describe('Redención Física RWA (Burn-to-Redeem)', () => {
+    it('quema unidades, reduce el suministro circulante e incrementa totalBurnedUnits', () => {
+      const assets = createInitialAssets();
+      const cafe = assets['cafe-montana-dorada'];
+      cafe.totalSupply = 100n;
+      cafe.reserveBalance = 5000n;
+
+      const userUnits = 50n;
+      const { updatedAsset, remainingUnits } = burnToRedeem(cafe, userUnits, 40n);
+
+      expect(remainingUnits).toBe(10n);
+      expect(updatedAsset.totalSupply).toBe(60n);
+      expect(updatedAsset.totalBurnedUnits).toBe(40n);
+      // No debe afectar negativamente las reservas líquidas
+      expect(updatedAsset.reserveBalance).toBe(5000n);
+      expect(updatedAsset.totalSupply + updatedAsset.totalBurnedUnits).toBeLessThanOrEqual(1000n);
+    });
+
+    it('impide quemar más unidades de las que el participante posee', () => {
+      const assets = createInitialAssets();
+      const volcan = assets['cafe-volcan-rojo'];
+      volcan.totalSupply = 100n;
+
+      const userUnits = 30n;
+      expect(() => burnToRedeem(volcan, userUnits, 60n)).toThrow(/Saldo insuficiente para redimir/);
+    });
+
+    it('impide quemar 0 unidades', () => {
+      const assets = createInitialAssets();
+      const arte = assets['arte-urbano-medellin'];
+      arte.totalSupply = 100n;
+
+      expect(() => burnToRedeem(arte, 50n, 0n)).toThrow(/mayor a 0/);
+    });
   });
 });
