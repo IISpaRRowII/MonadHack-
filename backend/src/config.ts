@@ -8,6 +8,7 @@ export const config = {
   monad: {
     rpcUrl: process.env.MONAD_RPC_URL || "https://testnet-rpc.monad.xyz/",
     chainId: parseInt(process.env.MONAD_CHAIN_ID || "10143", 10),
-    contractAddress: process.env.COUNTER_CONTRACT_ADDRESS || "",
+    contractAddress: process.env.TAP_TO_OWN_CONTRACT_ADDRESS || process.env.COUNTER_CONTRACT_ADDRESS || "",
   },
 };
+
