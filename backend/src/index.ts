@@ -4,7 +4,6 @@ import { ethers } from "ethers";
 import { config } from "./config.js";
 import { tapToOwnRouter } from "./routes/tapToOwn.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
-import { renderDashboardHtml } from "./views/dashboardHtml.js";
 
 const app = express();
 
@@ -23,13 +22,21 @@ app.use((req: Request, res: Response, next) => {
   next();
 });
 
-// Panel de Control en Vivo para el Backend (Monitor Visual en tiempo real)
+// Endpoint raíz de la API
 app.get("/", (_req: Request, res: Response) => {
-  res.send(renderDashboardHtml());
-});
-
-app.get("/dashboard", (_req: Request, res: Response) => {
-  res.send(renderDashboardHtml());
+  res.json({
+    status: "ok",
+    service: "Monad Tap-to-Own Backend API",
+    frontend: "http://localhost:3002",
+    message: "Toda la interfaz visual se encuentra centralizada en el frontend",
+    endpoints: {
+      health: "/health",
+      assets: "/api/tap-to-own/assets",
+      events: "/api/tap-to-own/events",
+      leaderboard: "/api/tap-to-own/leaderboard",
+      stream: "/api/tap-to-own/stream",
+    },
+  });
 });
 
 // Rutas de Autenticación con Wallet Monad (SIWE - Sign-In with Ethereum/Monad)
@@ -68,8 +75,8 @@ app.get("/api/monad/block", async (_req: Request, res: Response) => {
 app.listen(config.port, () => {
   console.log(`====================================================`);
   console.log(`⚡ Monad Tap-to-Own Backend listo`);
-  console.log(`📡 Servidor:    http://localhost:${config.port}`);
-  console.log(`🖥️  Monitor:     http://localhost:${config.port}/dashboard`);
-  console.log(`⚡ SSE Stream:  http://localhost:${config.port}/api/tap-to-own/stream`);
+  console.log(`📡 Servidor API:    http://localhost:${config.port}`);
+  console.log(`🖥️  Frontend dApp:  http://localhost:3002`);
+  console.log(`⚡ SSE Stream:      http://localhost:${config.port}/api/tap-to-own/stream`);
   console.log(`====================================================`);
 });

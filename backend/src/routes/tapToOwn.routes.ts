@@ -6,7 +6,7 @@ import { config } from "../config.js";
 
 export const tapToOwnRouter = Router();
 
-// 1. Obtener los 4 lotes de café con su estado en vivo
+// 1. Obtener los lotes de café con su estado en vivo
 tapToOwnRouter.get("/assets", (_req: Request, res: Response) => {
   const assets = tapToOwnService.getAssets();
   res.json({
@@ -20,11 +20,47 @@ tapToOwnRouter.get("/assets", (_req: Request, res: Response) => {
   });
 });
 
+// 1b. Crear un nuevo fondo de inversión tokenizado
+tapToOwnRouter.post("/assets", (req: Request, res: Response) => {
+  const { company, products, totalFundValue, origin, altitude, notes, color } = req.body;
+
+  if (!company || !products || totalFundValue === undefined || totalFundValue === null) {
+    return res.status(400).json({
+      success: false,
+      error: "Se requieren los campos: 'company' (Empresa), 'products' (Productos) y 'totalFundValue' (Valor total del fondo en MON)",
+    });
+  }
+
+  const numVal = parseFloat(totalFundValue);
+  if (isNaN(numVal) || numVal <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "'totalFundValue' debe ser un número positivo en MON",
+    });
+  }
+
+  const newAsset = tapToOwnService.createAsset({
+    company: String(company).trim(),
+    products: String(products).trim(),
+    totalFundValue: numVal,
+    origin: origin ? String(origin).trim() : undefined,
+    altitude: altitude ? String(altitude).trim() : undefined,
+    notes: Array.isArray(notes) ? notes : undefined,
+    color,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: `¡Fondo '${newAsset.name}' creado con éxito y dividido en 1,000 micro-acciones!`,
+    data: newAsset,
+  });
+});
+
 // 2. Detalle de un lote específico con lista de accionistas
 tapToOwnRouter.get("/assets/:id", (req: Request, res: Response) => {
   const assetId = parseInt(req.params.id, 10);
-  if (isNaN(assetId) || assetId < 0 || assetId > 3) {
-    return res.status(400).json({ success: false, error: "ID de activo inválido (0 a 3)" });
+  if (isNaN(assetId) || assetId < 0) {
+    return res.status(400).json({ success: false, error: "ID de activo inválido" });
   }
 
   const asset = tapToOwnService.getAssetById(assetId);
@@ -110,7 +146,17 @@ tapToOwnRouter.post("/claim-dividends", (req: Request, res: Response) => {
   });
 });
 
-// 6. Leaderboard global (Patrones y Top Inversionistas)
+// 6. Portafolio de Inversión y Estadísticas por usuario
+tapToOwnRouter.get("/portfolio/:address", (req: Request, res: Response) => {
+  const address = req.params.address;
+  if (!address) {
+    return res.status(400).json({ success: false, error: "Se requiere address" });
+  }
+  const portfolio = tapToOwnService.getUserPortfolio(address);
+  res.json({ success: true, data: portfolio });
+});
+
+// 7. Leaderboard global (Patrones y Top Inversionistas)
 tapToOwnRouter.get("/leaderboard", (_req: Request, res: Response) => {
   const leaderboard = tapToOwnService.getLeaderboard();
   res.json({ success: true, data: leaderboard });

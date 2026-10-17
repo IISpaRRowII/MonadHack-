@@ -1,5 +1,17 @@
-import { useState, useEffect } from 'react';
-import { ethers } from 'ethers';
+import { useState, useEffect, useCallback } from 'react';
+import { Navbar } from './components/Navbar';
+import { InvestmentsView } from './components/InvestmentsView';
+import { StatisticsView } from './components/StatisticsView';
+import { BuyModal, SellModal, CreateFundModal } from './components/Modals';
+import { api } from './services/api';
+import {
+  ActiveScreen,
+  CoffeeAsset,
+  TapEvent,
+  LeaderboardEntry,
+  UserPortfolio,
+  PurchaseMode,
+} from './types';
 
 declare global {
   interface Window {
@@ -7,8 +19,8 @@ declare global {
   }
 }
 
-const MONAD_TESTNET_PARAMS = {
-  chainId: '0x279f', // 10143 in hex
+const MONAD_NETWORK_PARAMS = {
+  chainId: '0x279f', // 10143
   chainName: 'Monad Testnet',
   nativeCurrency: {
     name: 'Monad',
@@ -19,345 +31,594 @@ const MONAD_TESTNET_PARAMS = {
   blockExplorerUrls: ['https://testnet.monadexplorer.com/'],
 };
 
-const COUNTER_ABI = [
-  'function number() view returns (uint256)',
-  'function increment() public',
-  'function setNumber(uint256 newNumber) public'
-];
-
 export default function App() {
+  // Navigation
+  const [activeScreen, setActiveScreen] = useState<ActiveScreen>('investments');
+
+  // Web3 State
   const [account, setAccount] = useState<string>('');
   const [chainId, setChainId] = useState<number | null>(null);
+  const [balanceMon, setBalanceMon] = useState<string | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(
+    localStorage.getItem('monad_session_token') || null
+  );
+
+  // Business State
+  const [assets, setAssets] = useState<CoffeeAsset[]>([]);
+  const [events, setEvents] = useState<TapEvent[]>([]);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [userPortfolio, setUserPortfolio] = useState<UserPortfolio | null>(null);
+  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>('onchain');
   const [contractAddress, setContractAddress] = useState<string>('');
-  const [counterValue, setCounterValue] = useState<string | null>(null);
-  const [newNumberInput, setNewNumberInput] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
-  const [statusMsg, setStatusMsg] = useState<string>('');
-  const [backendHealth, setBackendHealth] = useState<{ status: string; timestamp: string } | null>(null);
-  const [latestBlock, setLatestBlock] = useState<number | null>(null);
 
-  useEffect(() => {
-    checkBackendHealth();
-    if (window.ethereum) {
-      window.ethereum.request({ method: 'eth_accounts' }).then((accounts: string[]) => {
-        if (accounts.length > 0) {
-          setAccount(accounts[0]);
-        }
-      });
+  // Status & Connectivity
+  const [isSSEConnected, setIsSSEConnected] = useState<boolean>(false);
+  const [loadingAssetId, setLoadingAssetId] = useState<number | null>(null);
+  const [claimingDividends, setClaimingDividends] = useState<boolean>(false);
+  const [modalBuyAsset, setModalBuyAsset] = useState<CoffeeAsset | null>(null);
+  const [modalSellAsset, setModalSellAsset] = useState<CoffeeAsset | null>(null);
+  const [isCreateFundOpen, setIsCreateFundOpen] = useState<boolean>(false);
+  const [modalLoading, setModalLoading] = useState<boolean>(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-      window.ethereum.request({ method: 'eth_chainId' }).then((hexChainId: string) => {
-        setChainId(parseInt(hexChainId, 16));
-      });
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4500);
+  };
 
-      window.ethereum.on('accountsChanged', (accounts: string[]) => {
-        setAccount(accounts[0] || '');
+  // 1. Consultar saldo en MON de la wallet
+  const fetchBalance = useCallback(async (walletAddress: string) => {
+    if (!window.ethereum || !walletAddress) return;
+    try {
+      const balanceHex = await window.ethereum.request({
+        method: 'eth_getBalance',
+        params: [walletAddress, 'latest'],
       });
-
-      window.ethereum.on('chainChanged', (hexChainId: string) => {
-        setChainId(parseInt(hexChainId, 16));
-      });
+      const balanceWei = BigInt(balanceHex);
+      const mon = (Number(balanceWei) / 1e18).toFixed(4);
+      setBalanceMon(`${mon} MON`);
+    } catch (err) {
+      console.warn('No se pudo obtener saldo en Monad:', err);
     }
   }, []);
 
-  const checkBackendHealth = async () => {
-    try {
-      const res = await fetch('http://localhost:3001/health');
-      if (res.ok) {
-        const data = await res.json();
-        setBackendHealth(data);
-      }
-      const blockRes = await fetch('http://localhost:3001/api/monad/block');
-      if (blockRes.ok) {
-        const blockData = await blockRes.json();
-        setLatestBlock(blockData.blockNumber);
-      }
-    } catch {
-      // Backend might be offline currently
+  // 2. Cargar Portafolio del Usuario
+  const loadUserPortfolio = useCallback(async (walletAddress: string) => {
+    if (!walletAddress) {
+      setUserPortfolio(null);
+      return;
     }
-  };
+    const data = await api.getUserPortfolio(walletAddress);
+    if (data) {
+      setUserPortfolio(data);
+    }
+  }, []);
 
+  // 3. Inicializar datos del backend
+  const loadInitialData = useCallback(async () => {
+    try {
+      const [assetsData, lbData, eventsData, contractData] = await Promise.all([
+        api.getAssets(),
+        api.getLeaderboard(),
+        api.getEvents(),
+        api.getContractInfo(),
+      ]);
+      setAssets(assetsData);
+      setLeaderboard(lbData);
+      setEvents(eventsData);
+      if (contractData?.contract?.address && contractData.contract.address.startsWith('0x')) {
+        setContractAddress(contractData.contract.address);
+      }
+    } catch (err) {
+      console.error('Error cargando datos iniciales:', err);
+    }
+  }, []);
+
+  // 4. Conexión en vivo por SSE
+  useEffect(() => {
+    loadInitialData();
+
+    const sse = api.createSSEConnection({
+      onOpen: () => setIsSSEConnected(true),
+      onError: () => setIsSSEConnected(false),
+      onInitialState: (data) => {
+        if (data.assets) setAssets(data.assets);
+        if (data.leaderboard) setLeaderboard(data.leaderboard);
+        if (data.recentEvents) setEvents(data.recentEvents);
+      },
+      onTapExecuted: (data) => {
+        if (data.asset) {
+          setAssets((prev) =>
+            prev.map((a) => (a.id === data.asset!.id ? { ...a, ...data.asset } : a))
+          );
+        }
+        if (data.event) {
+          setEvents((prev) => [data.event!, ...prev.slice(0, 30)]);
+          if (data.event.isNewPatron) {
+            showToast(`👑 ¡Nuevo Patrón en ${data.event.assetName}!`, 'info');
+          }
+        }
+        // Refrescar Leaderboard
+        api.getLeaderboard().then(setLeaderboard);
+      },
+    });
+
+    return () => {
+      sse.close();
+    };
+  }, [loadInitialData]);
+
+  // 5. Escuchar cambios de wallet / Ethereum (respetando estado de logout de la dApp)
+  useEffect(() => {
+    const isLoggedOut = localStorage.getItem('monad_app_logged_out') === 'true';
+
+    if (window.ethereum) {
+      if (!isLoggedOut) {
+        window.ethereum.request({ method: 'eth_accounts' }).then((accounts: string[]) => {
+          if (accounts.length > 0) {
+            setAccount(accounts[0]);
+            fetchBalance(accounts[0]);
+            loadUserPortfolio(accounts[0]);
+          }
+        });
+      }
+
+      window.ethereum.request({ method: 'eth_chainId' }).then((hexId: string) => {
+        setChainId(parseInt(hexId, 16));
+      });
+
+      const handleAccountsChanged = (accounts: string[]) => {
+        const currentlyLoggedOut = localStorage.getItem('monad_app_logged_out') === 'true';
+        if (currentlyLoggedOut) return;
+
+        const nextAccount = accounts[0] || '';
+        setAccount(nextAccount);
+        if (nextAccount) {
+          fetchBalance(nextAccount);
+          loadUserPortfolio(nextAccount);
+        } else {
+          setBalanceMon(null);
+          setUserPortfolio(null);
+        }
+      };
+
+      const handleChainChanged = (hexId: string) => {
+        setChainId(parseInt(hexId, 16));
+        if (account) fetchBalance(account);
+      };
+
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      window.ethereum.on('chainChanged', handleChainChanged);
+
+      return () => {
+        if (window.ethereum.removeListener) {
+          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+          window.ethereum.removeListener('chainChanged', handleChainChanged);
+        }
+      };
+    }
+  }, [account, fetchBalance, loadUserPortfolio]);
+
+  // Refrescar portafolio cuando cambien los eventos o activos
+  useEffect(() => {
+    if (account) {
+      loadUserPortfolio(account);
+      fetchBalance(account);
+    }
+  }, [events, account, loadUserPortfolio, fetchBalance]);
+
+  // 6. Iniciar Sesión / Conectar Wallet (pide confirmación y firma con la wallet)
   const connectWallet = async () => {
     if (!window.ethereum) {
-      alert('MetaMask / Web3 provider not detected!');
+      alert('No se detectó billetera Web3 (MetaMask o compatible).');
       return;
     }
     try {
-      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-      setAccount(accounts[0]);
-      const hexChainId = await window.ethereum.request({ method: 'eth_chainId' });
-      setChainId(parseInt(hexChainId, 16));
+      showToast('Por favor confirma en tu wallet para iniciar sesión...', 'info');
+
+      // 1. Forzar apertura de confirmación de cuenta en MetaMask
+      let accounts: string[] = [];
+      try {
+        const permissions = await window.ethereum.request({
+          method: 'wallet_requestPermissions',
+          params: [{ eth_accounts: {} }],
+        });
+        const accountsPermission = permissions.find((p: any) => p.parentCapability === 'eth_accounts');
+        if (accountsPermission && accountsPermission.caveats) {
+          const caveat = accountsPermission.caveats.find((c: any) => c.type === 'filterResponse');
+          if (caveat && caveat.value && caveat.value.length > 0) {
+            accounts = caveat.value;
+          }
+        }
+      } catch (permErr: any) {
+        if (permErr.code === 4001) {
+          showToast('Inicio de sesión cancelado en la wallet', 'info');
+          return;
+        }
+      }
+
+      if (!accounts || accounts.length === 0) {
+        accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      }
+
+      if (!accounts || accounts.length === 0) {
+        showToast('No se seleccionó ninguna cuenta en la wallet', 'error');
+        return;
+      }
+
+      const addr = accounts[0];
+
+      // 2. Asegurar red Monad Testnet (10143)
+      await switchToMonadNetwork();
+
+      // 3. Confirmación criptográfica con la wallet (personal_sign)
+      showToast('Firma la solicitud en MetaMask para validar tu acceso...', 'info');
+      const challengeMsg = await api.requestAuthChallenge(addr);
+      const messageToSign =
+        challengeMsg ||
+        `Iniciar sesión en Monad Tap-to-Own RWA\nWallet: ${addr}\nTimestamp: ${Date.now()}`;
+
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [messageToSign, addr],
+      });
+
+      // 4. Verificar firma en el backend
+      const token = await api.verifyAuthSignature(addr, signature);
+      if (token) {
+        setSessionToken(token);
+        localStorage.setItem('monad_session_token', token);
+      }
+
+      // 5. Quitar bandera de logout y establecer sesión activa
+      localStorage.removeItem('monad_app_logged_out');
+      setAccount(addr);
+      await fetchBalance(addr);
+      await loadUserPortfolio(addr);
+
+      showToast('¡Sesión confirmada y autenticada con tu wallet!', 'success');
     } catch (err: any) {
-      setStatusMsg(`Connection error: ${err.message}`);
+      if (err.code === 4001) {
+        showToast('Confirmación cancelada en la wallet', 'info');
+      } else {
+        showToast(`Error de conexión: ${err.message}`, 'error');
+      }
     }
   };
 
-  const switchToMonad = async () => {
+  // Cerrar Sesión en la dApp sin desconectar la wallet de MetaMask
+  const logoutSession = () => {
+    localStorage.setItem('monad_app_logged_out', 'true');
+    localStorage.removeItem('monad_session_token');
+    setSessionToken(null);
+    setAccount('');
+    setBalanceMon(null);
+    setUserPortfolio(null);
+    showToast('Sesión cerrada en la dApp. Tu wallet sigue autorizada en MetaMask.', 'info');
+  };
+
+  // 7. Cambiar o Añadir Monad Testnet (10143)
+  const switchToMonadNetwork = async () => {
     if (!window.ethereum) return;
     try {
       await window.ethereum.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: MONAD_TESTNET_PARAMS.chainId }],
+        params: [{ chainId: MONAD_NETWORK_PARAMS.chainId }],
       });
+      setChainId(10143);
     } catch (switchError: any) {
       if (switchError.code === 4902) {
         try {
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
-            params: [MONAD_TESTNET_PARAMS],
+            params: [MONAD_NETWORK_PARAMS],
           });
+          setChainId(10143);
         } catch (addError: any) {
-          setStatusMsg(`Failed to add network: ${addError.message}`);
+          showToast(`Error al añadir red Monad: ${addError.message}`, 'error');
         }
       } else {
-        setStatusMsg(`Failed to switch network: ${switchError.message}`);
+        showToast(`Error al cambiar a Monad: ${switchError.message}`, 'error');
       }
     }
   };
 
-  const readCounter = async () => {
-    if (!contractAddress) {
-      setStatusMsg('Please enter a Counter contract address.');
+  // 8. Ejecutar Compra / TAP
+  const handleTapBuy = async (assetId: number, sharesCount: number = 1) => {
+    let currentAccount = account;
+    if (!currentAccount) {
+      const confirmConnect = window.confirm(
+        'Debes conectar tu wallet para comprar micro-acciones y competir por el lote. ¿Deseas conectarla ahora?'
+      );
+      if (confirmConnect) {
+        await connectWallet();
+      }
       return;
     }
+
+    const asset = assets.find((a) => a.id === assetId);
+    if (!asset) return;
+
+    setLoadingAssetId(assetId);
+
     try {
-      setLoading(true);
-      setStatusMsg('Reading contract state...');
-      const provider = window.ethereum
-        ? new ethers.BrowserProvider(window.ethereum)
-        : new ethers.JsonRpcProvider(MONAD_TESTNET_PARAMS.rpcUrls[0]);
-      const contract = new ethers.Contract(contractAddress, COUNTER_ABI, provider);
-      const val = await contract.number();
-      setCounterValue(val.toString());
-      setStatusMsg('Counter state loaded successfully.');
+      let txHash: string | undefined = undefined;
+
+      // 1. Modo On-Chain: Descontar MON real vía MetaMask en Monad Testnet
+      if (purchaseMode === 'onchain') {
+        const costMon = (asset.currentPrice * sharesCount).toFixed(6);
+        const costWei = BigInt(Math.floor(parseFloat(costMon) * 1e18));
+        const costWeiHex = '0x' + costWei.toString(16);
+
+        const targetTo = contractAddress || currentAccount;
+
+        let callData = '0x';
+        if (contractAddress) {
+          const paramAssetId = BigInt(assetId).toString(16).padStart(64, '0');
+          const paramShares = BigInt(sharesCount).toString(16).padStart(64, '0');
+          callData = '0xbeebc5da' + paramAssetId + paramShares;
+        }
+
+        showToast(`Autorizando transacción de ${costMon} MON en MetaMask...`, 'info');
+
+        txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [
+            {
+              from: currentAccount,
+              to: targetTo,
+              value: costWeiHex,
+              data: callData,
+            },
+          ],
+        });
+
+        console.log('[+] Transacción enviada en Monad Testnet! TxHash:', txHash);
+      }
+
+      // 2. Registrar en Backend
+      const result = await api.sendTap({
+        assetId,
+        buyerAddress: currentAccount,
+        sharesCount,
+        txHash,
+        sessionToken,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Error al ejecutar compra');
+      }
+
+      showToast(
+        `¡Tap Exitoso! Adquiridas ${sharesCount} acción(es) de ${asset.name}`,
+        'success'
+      );
+
+      // Actualizar saldo y portafolio
+      setTimeout(() => {
+        fetchBalance(currentAccount);
+        loadUserPortfolio(currentAccount);
+      }, 1000);
     } catch (err: any) {
-      setStatusMsg(`Read error: ${err.message}`);
+      if (err.code === 4001) {
+        showToast('Transacción cancelada en la billetera', 'info');
+      } else {
+        showToast(`Error en la operación: ${err.message}`, 'error');
+      }
     } finally {
-      setLoading(false);
+      setLoadingAssetId(null);
     }
   };
 
-  const incrementCounter = async () => {
-    if (!contractAddress || !window.ethereum) {
-      setStatusMsg('Please connect wallet and enter contract address.');
-      return;
-    }
+  // 9. Ejecutar Compra desde Modal Personalizado
+  const handleConfirmCustomBuy = async (assetId: number, shares: number) => {
+    setModalLoading(true);
     try {
-      setLoading(true);
-      setStatusMsg('Submitting transaction to Monad...');
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, COUNTER_ABI, signer);
-      const tx = await contract.increment();
-      setStatusMsg(`Tx submitted: ${tx.hash}. Awaiting confirmation...`);
-      await tx.wait();
-      setStatusMsg(`Tx confirmed! ${tx.hash}`);
-      await readCounter();
-    } catch (err: any) {
-      setStatusMsg(`Tx error: ${err.message}`);
+      await handleTapBuy(assetId, shares);
+      setModalBuyAsset(null);
     } finally {
-      setLoading(false);
+      setModalLoading(false);
     }
   };
 
-  const handleSetNumber = async () => {
-    if (!contractAddress || !window.ethereum || !newNumberInput) {
-      setStatusMsg('Please provide contract address, value, and connect wallet.');
-      return;
-    }
+  // 10. Ejecutar Venta de Acciones
+  const handleConfirmSell = async (assetId: number, shares: number) => {
+    if (!account) return;
+    setModalLoading(true);
     try {
-      setLoading(true);
-      setStatusMsg('Sending setNumber transaction...');
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, COUNTER_ABI, signer);
-      const tx = await contract.setNumber(BigInt(newNumberInput));
-      setStatusMsg(`Tx submitted: ${tx.hash}. Waiting for block inclusion...`);
-      await tx.wait();
-      setStatusMsg(`Number updated!`);
-      setNewNumberInput('');
-      await readCounter();
+      const res = await api.sellShares({
+        assetId,
+        sellerAddress: account,
+        sharesCount: shares,
+      });
+
+      if (!res.success) {
+        throw new Error(res.error || 'Error al vender');
+      }
+
+      showToast(`¡Venta exitosa! Liquidadas ${shares} acción(es)`, 'success');
+      setModalSellAsset(null);
+
+      setTimeout(() => {
+        fetchBalance(account);
+        loadUserPortfolio(account);
+      }, 1000);
     } catch (err: any) {
-      setStatusMsg(`Tx error: ${err.message}`);
+      showToast(`Error al vender: ${err.message}`, 'error');
     } finally {
-      setLoading(false);
+      setModalLoading(false);
     }
   };
 
-  const isMonadChain = chainId === 10143;
+  // 11. Reclamar Dividendos
+  const handleClaimDividends = async () => {
+    if (!account) return;
+    setClaimingDividends(true);
+    try {
+      const res = await api.claimDividends(account);
+      if (res.success) {
+        showToast(res.message || 'Dividendos reclamados con éxito', 'success');
+        await loadUserPortfolio(account);
+        await fetchBalance(account);
+      } else {
+        showToast('No fue posible reclamar dividendos', 'error');
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`, 'error');
+    } finally {
+      setClaimingDividends(false);
+    }
+  };
+
+  // 12. Crear Nuevo Fondo de Inversión (guardado en .json)
+  const handleCreateFund = async (data: {
+    company: string;
+    products: string;
+    totalFundValue: number;
+    origin?: string;
+    altitude?: string;
+    notes?: string[];
+    color?: string;
+  }) => {
+    setModalLoading(true);
+    try {
+      const res = await api.createFund(data);
+      if (!res.success) {
+        throw new Error(res.error || 'Error al crear fondo');
+      }
+      showToast(res.message || '¡Fondo creado exitosamente y guardado en .json!', 'success');
+      setIsCreateFundOpen(false);
+      // Recargar la lista de activos
+      const updated = await api.getAssets();
+      setAssets(updated);
+    } catch (err: any) {
+      showToast(`Error al crear fondo: ${err.message}`, 'error');
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  // Mapa de acciones poseídas por el usuario para cada lote
+  const userSharesByAsset: Record<number, number> = {};
+  if (userPortfolio?.holdings) {
+    userPortfolio.holdings.forEach((h) => {
+      userSharesByAsset[h.assetId] = h.shares;
+    });
+  }
 
   return (
-    <div className="app-container">
-      <header className="app-header">
-        <div className="brand">
-          <div className="logo-badge">🟣</div>
-          <div>
-            <h1>Monad Hackathon</h1>
-            <p className="subtitle">Foundry + Express + React + Python Fullstack Scaffolding</p>
-          </div>
+    <div className="app-layout">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`toast-banner toast-${toast.type} animate-slide-down`}>
+          <span>{toast.message}</span>
+          <button className="toast-close-btn" onClick={() => setToast(null)}>✕</button>
         </div>
+      )}
 
-        <div className="wallet-section">
-          {account ? (
-            <div className="account-pill">
-              <span className={`status-dot ${isMonadChain ? 'online' : 'warning'}`}></span>
-              <span>{account.slice(0, 6)}...{account.slice(-4)}</span>
-              {!isMonadChain && (
-                <button className="btn-sm switch-btn" onClick={switchToMonad}>
-                  Switch to Monad (10143)
-                </button>
-              )}
-            </div>
-          ) : (
-            <button className="btn-primary" onClick={connectWallet}>
-              Connect Wallet
-            </button>
-          )}
-        </div>
-      </header>
+      {/* Main Navbar with Navigation Switcher */}
+      <Navbar
+        activeScreen={activeScreen}
+        setActiveScreen={setActiveScreen}
+        account={account}
+        chainId={chainId}
+        balanceMon={balanceMon}
+        isSSEConnected={isSSEConnected}
+        onConnectWallet={connectWallet}
+        onLogout={logoutSession}
+        onSwitchToMonad={switchToMonadNetwork}
+        onOpenCreateFund={() => setIsCreateFundOpen(true)}
+      />
 
-      <main className="grid-layout">
-        {/* Network & Backend Status Card */}
-        <section className="card">
-          <div className="card-header">
-            <h3>⚡ System & Network Status</h3>
-            <span className={`badge ${backendHealth ? 'badge-success' : 'badge-neutral'}`}>
-              {backendHealth ? 'Backend Online' : 'Backend Standby'}
-            </span>
-          </div>
-
-          <div className="stats-list">
-            <div className="stat-item">
-              <span className="stat-label">Network</span>
-              <span className="stat-value font-mono">Monad Testnet (10143)</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-label">RPC Endpoint</span>
-              <span className="stat-value font-mono truncate">{MONAD_TESTNET_PARAMS.rpcUrls[0]}</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-label">Latest Block (via API)</span>
-              <span className="stat-value font-mono">{latestBlock !== null ? `#${latestBlock}` : 'Querying...'}</span>
-            </div>
-            <div className="stat-item">
-              <span className="stat-label">Connected Chain ID</span>
-              <span className={`stat-value font-mono ${isMonadChain ? 'text-green' : 'text-yellow'}`}>
-                {chainId ? `${chainId} ${isMonadChain ? '(Match)' : '(Not Monad)'}` : 'Wallet not connected'}
-              </span>
-            </div>
-          </div>
-
-          <button className="btn-secondary" onClick={checkBackendHealth} style={{ marginTop: '1rem', width: '100%' }}>
-            🔄 Refresh Status
-          </button>
-        </section>
-
-        {/* Counter Contract Interaction Card */}
-        <section className="card">
-          <div className="card-header">
-            <h3>📜 Smart Contract (Counter.sol)</h3>
-            <span className="badge badge-purple">EVM on Monad</span>
-          </div>
-
-          <div className="input-group">
-            <label>Deployed Contract Address</label>
-            <input
-              type="text"
-              placeholder="0x..."
-              value={contractAddress}
-              onChange={(e) => setContractAddress(e.target.value)}
-              className="font-mono"
-            />
-          </div>
-
-          <div className="counter-display">
-            <div className="counter-metric">
-              <span className="counter-num">{counterValue !== null ? counterValue : '--'}</span>
-              <span className="counter-label">Current Counter Number</span>
-            </div>
-            <button className="btn-secondary" onClick={readCounter} disabled={loading}>
-              Fetch Value
-            </button>
-          </div>
-
-          <div className="actions-grid">
-            <button
-              className="btn-primary"
-              onClick={incrementCounter}
-              disabled={loading || !account || !isMonadChain}
-            >
-              + Increment Number
-            </button>
-
-            <div className="set-group">
-              <input
-                type="number"
-                placeholder="New value"
-                value={newNumberInput}
-                onChange={(e) => setNewNumberInput(e.target.value)}
-              />
-              <button
-                className="btn-secondary"
-                onClick={handleSetNumber}
-                disabled={loading || !account || !isMonadChain || !newNumberInput}
-              >
-                Set
-              </button>
-            </div>
-          </div>
-
-          {statusMsg && (
-            <div className="status-banner">
-              <span>{statusMsg}</span>
-            </div>
-          )}
-        </section>
-
-        {/* Scaffolding Modules Directory */}
-        <section className="card full-width">
-          <h3>📦 Project Modules & Architecture</h3>
-          <div className="modules-grid">
-            <div className="module-item">
-              <h4>1. Smart Contracts</h4>
-              <p className="text-muted">Foundry project with <code>Counter.sol</code>, deployment script, and test suite configured for Monad's 10,000 TPS EVM.</p>
-              <div className="tag-list">
-                <span className="tag">Solidity ^0.8.13</span>
-                <span className="tag">Foundry</span>
-                <span className="tag">Forge Test</span>
-              </div>
-            </div>
-
-            <div className="module-item">
-              <h4>2. Backend Service</h4>
-              <p className="text-muted">Node.js + Express + TypeScript service interfacing with Monad RPC and exposed via REST APIs.</p>
-              <div className="tag-list">
-                <span className="tag">TypeScript</span>
-                <span className="tag">Express</span>
-                <span className="tag">ethers.js v6</span>
-              </div>
-            </div>
-
-            <div className="module-item">
-              <h4>3. Python Pipeline</h4>
-              <p className="text-muted">Python processing layer with Web3 connection utilities for automated data indexing, bots, or machine learning.</p>
-              <div className="tag-list">
-                <span className="tag">Python 3.14</span>
-                <span className="tag">Web3.py</span>
-                <span className="tag">Pipeline</span>
-              </div>
-            </div>
-
-            <div className="module-item">
-              <h4>4. Frontend App</h4>
-              <p className="text-muted">React + Vite + TypeScript frontend with instant wallet connectivity, dark theme, and contract execution.</p>
-              <div className="tag-list">
-                <span className="tag">React 18</span>
-                <span className="tag">Vite</span>
-                <span className="tag">Vanilla CSS</span>
-              </div>
-            </div>
-          </div>
-        </section>
+      {/* Content depending on Active Screen */}
+      <main className="main-content-wrapper">
+        {activeScreen === 'investments' ? (
+          <InvestmentsView
+            assets={assets}
+            events={events}
+            leaderboard={leaderboard}
+            account={account}
+            purchaseMode={purchaseMode}
+            setPurchaseMode={setPurchaseMode}
+            contractAddress={contractAddress}
+            setContractAddress={setContractAddress}
+            onTapBuy={handleTapBuy}
+            onOpenCustomBuy={(asset) => setModalBuyAsset(asset)}
+            onOpenSellModal={(asset) => setModalSellAsset(asset)}
+            onOpenCreateFund={() => setIsCreateFundOpen(true)}
+            loadingAssetId={loadingAssetId}
+            userSharesByAsset={userSharesByAsset}
+          />
+        ) : (
+          <StatisticsView
+            assets={assets}
+            leaderboard={leaderboard}
+            userPortfolio={userPortfolio}
+            account={account}
+            onConnectWallet={connectWallet}
+            onClaimDividends={handleClaimDividends}
+            claimingDividends={claimingDividends}
+            onNavigateToInvestments={() => setActiveScreen('investments')}
+            onOpenCustomBuy={(asset) => setModalBuyAsset(asset)}
+            onOpenSellModal={(asset) => setModalSellAsset(asset)}
+          />
+        )}
       </main>
+
+      {/* Footer */}
+      <footer className="app-footer">
+        <div className="footer-content">
+          <div className="footer-left">
+            <span>🟣 Monad Hackathon 2026 • Tap-to-Own RWA</span>
+            <span className="footer-dot">•</span>
+            <span>10,000 TPS Monad EVM</span>
+          </div>
+          <div className="footer-right font-mono">
+            <a
+              href="https://testnet.monadexplorer.com/"
+              target="_blank"
+              rel="noreferrer"
+              className="footer-link"
+            >
+              Explorador Monad ↗
+            </a>
+            <span className="footer-dot">•</span>
+            <span>Chain ID: 10143</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* Custom Buy Modal */}
+      {modalBuyAsset && (
+        <BuyModal
+          asset={modalBuyAsset}
+          onClose={() => setModalBuyAsset(null)}
+          onConfirmBuy={handleConfirmCustomBuy}
+          purchaseMode={purchaseMode}
+          loading={modalLoading}
+        />
+      )}
+
+      {/* Sell Modal */}
+      {modalSellAsset && (
+        <SellModal
+          asset={modalSellAsset}
+          userOwnedShares={userSharesByAsset[modalSellAsset.id] || 0}
+          onClose={() => setModalSellAsset(null)}
+          onConfirmSell={handleConfirmSell}
+          loading={modalLoading}
+        />
+      )}
+
+      {/* Create New Investment Fund Modal */}
+      <CreateFundModal
+        isOpen={isCreateFundOpen}
+        onClose={() => setIsCreateFundOpen(false)}
+        onCreateFund={handleCreateFund}
+        loading={modalLoading}
+      />
     </div>
   );
 }

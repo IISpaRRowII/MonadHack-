@@ -1,6 +1,9 @@
 export interface CoffeeAsset {
   id: number;
   name: string;
+  company?: string; // Empresa
+  products?: string; // Productos
+  totalFundValue?: number; // Valor total del fondo en MON
   variety: string;
   origin: string;
   altitude: string;

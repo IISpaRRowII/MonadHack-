@@ -1,89 +1,16 @@
 import { Response } from "express";
 import { ethers } from "ethers";
+import fs from "node:fs";
+import path from "node:path";
 import { CoffeeAsset, Shareholder, TapEvent, LeaderboardEntry } from "../types/tapToOwn.js";
 import { calculateBuyCost, calculateSellRefund, getNextSharePrice } from "./bondingCurve.js";
 import { config } from "../config.js";
 
 class TapToOwnService {
-  // 4 Activos de Café de Especialidad RWA Tokenizados
-  private assets: CoffeeAsset[] = [
-    {
-      id: 0,
-      name: "Lote Geisha Imperial",
-      variety: "Geisha de Altura",
-      origin: "Pitalito, Huila",
-      altitude: "1,950 msnm",
-      notes: ["Jazmín", "Melocotón", "Bergamota"],
-      totalShares: 1000,
-      soldShares: 145,
-      basePrice: 0.001, // en MON
-      priceSlope: 0.00002,
-      currentPrice: 0.0039,
-      patron: "0x71C...a49B",
-      patronShares: 42,
-      dividendPool: 0.0284,
-      totalVolume: 0.568,
-      color: "#FFB800", // Oro
-      accentColor: "#FFF0B3",
-    },
-    {
-      id: 1,
-      name: "Lote Bourbon Rosado",
-      variety: "Bourbon Rosado Fermentado",
-      origin: "Acevedo, Huila",
-      altitude: "1,800 msnm",
-      notes: ["Frutos Rojos", "Caña de Azúcar", "Cacao"],
-      totalShares: 1000,
-      soldShares: 210,
-      basePrice: 0.0008,
-      priceSlope: 0.000015,
-      currentPrice: 0.00395,
-      patron: "0x34B...F921",
-      patronShares: 60,
-      dividendPool: 0.0415,
-      totalVolume: 0.830,
-      color: "#FF4D8B", // Rosado / Rubí
-      accentColor: "#FFD6E7",
-    },
-    {
-      id: 2,
-      name: "Lote Caturra Miel",
-      variety: "Caturra Honey Process",
-      origin: "Génova, Quindío",
-      altitude: "1,700 msnm",
-      notes: ["Miel Silvestre", "Mandarina", "Vainilla"],
-      totalShares: 1000,
-      soldShares: 90,
-      basePrice: 0.0005,
-      priceSlope: 0.00001,
-      currentPrice: 0.0014,
-      patron: "0x89D...71E3",
-      patronShares: 25,
-      dividendPool: 0.0112,
-      totalVolume: 0.224,
-      color: "#00E5FF", // Cyan Eléctrico
-      accentColor: "#CCF9FF",
-    },
-    {
-      id: 3,
-      name: "Lote Castillo Ancestral",
-      variety: "Castillo Orgánico",
-      origin: "Jerifalte, Nariño",
-      altitude: "2,050 msnm",
-      notes: ["Panela", "Cítricos Brillantes", "Nuez"],
-      totalShares: 1000,
-      soldShares: 65,
-      basePrice: 0.0004,
-      priceSlope: 0.00001,
-      currentPrice: 0.00105,
-      patron: "0x52A...c904",
-      patronShares: 18,
-      dividendPool: 0.0078,
-      totalVolume: 0.156,
-      color: "#00E676", // Verde Esmeralda
-      accentColor: "#B9F6CA",
-    },
-  ];
+  private assetsFilePath = path.resolve(process.cwd(), "data", "assets.json");
+
+  // Activos de Café de Especialidad RWA Tokenizados
+  private assets: CoffeeAsset[] = [];
 
   // Registro de accionistas por [assetId][address]
   private shareholders: Map<number, Map<string, Shareholder>> = new Map();
@@ -95,33 +22,222 @@ class TapToOwnService {
   private sseClients: Response[] = [];
 
   constructor() {
-    // Inicializar mapas para cada lote
-    for (let i = 0; i < 4; i++) {
-      this.shareholders.set(i, new Map());
+    this.loadAssetsFromFile();
+    this.seedInitialHolders();
+  }
+
+  private loadAssetsFromFile(): void {
+    try {
+      if (fs.existsSync(this.assetsFilePath)) {
+        const raw = fs.readFileSync(this.assetsFilePath, "utf-8");
+        this.assets = JSON.parse(raw);
+      }
+    } catch (err) {
+      console.error("Error leyendo data/assets.json:", err);
     }
 
-    // Sembrar accionistas iniciales para los lotes
-    this.seedInitialHolders();
+    if (!this.assets || this.assets.length === 0) {
+      this.assets = [
+        {
+          id: 0,
+          name: "Lote Geisha Imperial",
+          company: "Hacienda Imperial Huila",
+          products: "Geisha de Altura Micro-Lote Especial",
+          totalFundValue: 1.0,
+          variety: "Geisha de Altura",
+          origin: "Pitalito, Huila",
+          altitude: "1,950 msnm",
+          notes: ["Jazmín", "Melocotón", "Bergamota"],
+          totalShares: 1000,
+          soldShares: 145,
+          basePrice: 0.001,
+          priceSlope: 0.00002,
+          currentPrice: 0.0039,
+          patron: "0x71C...a49B",
+          patronShares: 42,
+          dividendPool: 0.0284,
+          totalVolume: 0.568,
+          color: "#FFB800",
+          accentColor: "#FFF0B3",
+        },
+        {
+          id: 1,
+          name: "Lote Bourbon Rosado",
+          company: "Finca La Esperanza Acevedo",
+          products: "Bourbon Rosado Fermentación Carbónica",
+          totalFundValue: 0.8,
+          variety: "Bourbon Rosado Fermentado",
+          origin: "Acevedo, Huila",
+          altitude: "1,800 msnm",
+          notes: ["Frutos Rojos", "Caña de Azúcar", "Cacao"],
+          totalShares: 1000,
+          soldShares: 210,
+          basePrice: 0.0008,
+          priceSlope: 0.000015,
+          currentPrice: 0.00395,
+          patron: "0x34B...F921",
+          patronShares: 60,
+          dividendPool: 0.0415,
+          totalVolume: 0.83,
+          color: "#FF4D8B",
+          accentColor: "#FFD6E7",
+        },
+        {
+          id: 2,
+          name: "Lote Caturra Miel",
+          company: "Cooperativa Génova Quindío",
+          products: "Caturra Honey Process Tradición",
+          totalFundValue: 0.5,
+          variety: "Caturra Honey Process",
+          origin: "Génova, Quindío",
+          altitude: "1,700 msnm",
+          notes: ["Miel Silvestre", "Mandarina", "Vainilla"],
+          totalShares: 1000,
+          soldShares: 90,
+          basePrice: 0.0005,
+          priceSlope: 0.00001,
+          currentPrice: 0.0014,
+          patron: "0x89D...71E3",
+          patronShares: 25,
+          dividendPool: 0.0112,
+          totalVolume: 0.224,
+          color: "#00E5FF",
+          accentColor: "#CCF9FF",
+        },
+        {
+          id: 3,
+          name: "Lote Castillo Ancestral",
+          company: "Asociación Nariño Bio-Café",
+          products: "Castillo Orgánico Selección Altura",
+          totalFundValue: 0.4,
+          variety: "Castillo Orgánico",
+          origin: "Jerifalte, Nariño",
+          altitude: "2,050 msnm",
+          notes: ["Panela", "Cítricos Brillantes", "Nuez"],
+          totalShares: 1000,
+          soldShares: 65,
+          basePrice: 0.0004,
+          priceSlope: 0.00001,
+          currentPrice: 0.00105,
+          patron: "0x52A...c904",
+          patronShares: 18,
+          dividendPool: 0.0078,
+          totalVolume: 0.156,
+          color: "#00E676",
+          accentColor: "#B9F6CA",
+        },
+      ];
+      this.saveAssetsToFile();
+    }
 
-    // Actualizar precios iniciales
+    // Inicializar mapas de accionistas para cada lote cargado
     this.assets.forEach((asset) => {
+      if (!this.shareholders.has(asset.id)) {
+        this.shareholders.set(asset.id, new Map());
+      }
       asset.currentPrice = getNextSharePrice(asset.basePrice, asset.priceSlope, asset.soldShares);
     });
   }
 
+  public saveAssetsToFile(): void {
+    try {
+      const dir = path.dirname(this.assetsFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.assetsFilePath, JSON.stringify(this.assets, null, 2), "utf-8");
+    } catch (err) {
+      console.error("Error persistiendo assets en .json:", err);
+    }
+  }
+
+  /**
+   * Crear un nuevo fondo de inversión tokenizado y agregarlo a .json
+   * El valor total del fondo se divide entre 1,000 micro-acciones fijas
+   */
+  public createAsset(data: {
+    company: string;
+    products: string;
+    totalFundValue: number;
+    origin?: string;
+    altitude?: string;
+    notes?: string[];
+    color?: string;
+  }): CoffeeAsset {
+    const totalShares = 1000;
+    // Se divide el valor total del fondo entre 1,000 acciones
+    const basePrice = Number((data.totalFundValue / totalShares).toFixed(6));
+    const priceSlope = Number((basePrice * 0.02).toFixed(7));
+
+    const nextId = this.assets.length > 0 ? Math.max(...this.assets.map((a) => a.id)) + 1 : 0;
+    const palette = [
+      "#FFB800",
+      "#FF4D8B",
+      "#00E5FF",
+      "#00E676",
+      "#A78BFA",
+      "#F59E0B",
+      "#10B981",
+      "#EC4899",
+      "#38BDF8",
+    ];
+    const chosenColor = data.color || palette[nextId % palette.length];
+
+    const newAsset: CoffeeAsset = {
+      id: nextId,
+      name: `Fondo ${data.company}`,
+      company: data.company,
+      products: data.products,
+      totalFundValue: data.totalFundValue,
+      variety: data.products,
+      origin: data.origin || "Colombia (Especialidad)",
+      altitude: data.altitude || "1,850 msnm",
+      notes:
+        data.notes && data.notes.length > 0
+          ? data.notes
+          : ["Cosecha RWA", "Tokenizado en Monad"],
+      totalShares: 1000,
+      soldShares: 0,
+      basePrice,
+      priceSlope,
+      currentPrice: basePrice,
+      patron: "Sin Patrón",
+      patronShares: 0,
+      dividendPool: 0,
+      totalVolume: 0,
+      color: chosenColor,
+      accentColor: chosenColor + "33",
+    };
+
+    this.assets.push(newAsset);
+    this.shareholders.set(newAsset.id, new Map());
+    this.saveAssetsToFile();
+
+    // Notificar en vivo por SSE a todos los clientes conectados
+    this.broadcastSSE({
+      type: "INITIAL_STATE",
+      assets: this.assets,
+      leaderboard: this.getLeaderboard(),
+      recentEvents: this.recentEvents.slice(0, 10),
+    });
+
+    return newAsset;
+  }
+
   private seedInitialHolders() {
-    // Inicializar los patrones con sus acciones
     this.assets.forEach((asset) => {
-      if (asset.patron && asset.patronShares > 0) {
-        const lotHolders = this.shareholders.get(asset.id)!;
-        lotHolders.set(asset.patron, {
-          address: asset.patron,
-          shares: asset.patronShares,
-          investedMon: Number((asset.basePrice * asset.patronShares).toFixed(6)),
-          dividendsClaimed: 0,
-          unclaimedDividends: Number((asset.dividendPool * 0.6).toFixed(6)),
-          lastTapTimestamp: Date.now() - 60000,
-        });
+      if (asset.patron && asset.patronShares > 0 && asset.patron !== "Sin Patrón") {
+        const lotHolders = this.shareholders.get(asset.id);
+        if (lotHolders && !lotHolders.has(asset.patron)) {
+          lotHolders.set(asset.patron, {
+            address: asset.patron,
+            shares: asset.patronShares,
+            investedMon: Number((asset.basePrice * asset.patronShares).toFixed(6)),
+            dividendsClaimed: 0,
+            unclaimedDividends: Number((asset.dividendPool * 0.6).toFixed(6)),
+            lastTapTimestamp: Date.now() - 60000,
+          });
+        }
       }
     });
   }
@@ -252,6 +368,7 @@ class TapToOwnService {
       asset: this.getAssetById(assetId),
     });
 
+    this.saveAssetsToFile();
     return { success: true, event: tapEvent };
   }
 
@@ -324,6 +441,7 @@ class TapToOwnService {
       asset: this.getAssetById(assetId),
     });
 
+    this.saveAssetsToFile();
     return { success: true, event: sellEvent };
   }
 
@@ -347,6 +465,66 @@ class TapToOwnService {
     }
 
     return { claimedTotal, details };
+  }
+
+  /**
+   * Obtener el portafolio y estadísticas personales de un inversor
+   */
+  public getUserPortfolio(address: string) {
+    let totalShares = 0;
+    let totalInvestedMon = 0;
+    let totalCurrentValueMon = 0;
+    let totalUnclaimedDividends = 0;
+    let totalClaimedDividends = 0;
+
+    const holdings = this.assets.map((asset) => {
+      const lotHolders = this.shareholders.get(asset.id);
+      const holder = lotHolders?.get(address);
+      const shares = holder?.shares || 0;
+      const investedMon = holder?.investedMon || 0;
+      const unclaimedDividends = holder?.unclaimedDividends || 0;
+      const dividendsClaimed = holder?.dividendsClaimed || 0;
+      const currentValue = Number((shares * asset.currentPrice).toFixed(6));
+      const isPatron = asset.patron.toLowerCase() === address.toLowerCase();
+
+      totalShares += shares;
+      totalInvestedMon += investedMon;
+      totalCurrentValueMon += currentValue;
+      totalUnclaimedDividends += unclaimedDividends;
+      totalClaimedDividends += dividendsClaimed;
+
+      return {
+        assetId: asset.id,
+        assetName: asset.name,
+        variety: asset.variety,
+        shares,
+        percentageOfLot: Number(((shares / asset.totalShares) * 100).toFixed(2)),
+        investedMon,
+        currentValueMon: currentValue,
+        pnlMon: Number((currentValue - investedMon).toFixed(6)),
+        pnlPercent: investedMon > 0 ? Number((((currentValue - investedMon) / investedMon) * 100).toFixed(2)) : 0,
+        unclaimedDividends,
+        dividendsClaimed,
+        isPatron,
+        currentPrice: asset.currentPrice,
+        color: asset.color,
+      };
+    });
+
+    return {
+      address,
+      totalShares,
+      totalInvestedMon: Number(totalInvestedMon.toFixed(6)),
+      totalCurrentValueMon: Number(totalCurrentValueMon.toFixed(6)),
+      totalPnlMon: Number((totalCurrentValueMon - totalInvestedMon).toFixed(6)),
+      totalPnlPercent:
+        totalInvestedMon > 0
+          ? Number((((totalCurrentValueMon - totalInvestedMon) / totalInvestedMon) * 100).toFixed(2))
+          : 0,
+      totalUnclaimedDividends: Number(totalUnclaimedDividends.toFixed(6)),
+      totalClaimedDividends: Number(totalClaimedDividends.toFixed(6)),
+      holdings,
+    };
   }
 
   /**
