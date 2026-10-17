@@ -44,7 +44,7 @@ export function renderDashboardHtml(): string {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--card-border);
       flex-wrap: wrap;
@@ -111,7 +111,7 @@ export function renderDashboardHtml(): string {
       border: 1px solid var(--monad-purple);
       border-radius: 16px;
       padding: 16px 20px;
-      margin-bottom: 24px;
+      margin-bottom: 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -172,6 +172,74 @@ export function renderDashboardHtml(): string {
       display: inline-flex;
       align-items: center;
       gap: 6px;
+    }
+
+    .balance-badge {
+      background: rgba(0, 230, 118, 0.12);
+      border: 1px solid rgba(0, 230, 118, 0.4);
+      color: var(--success);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 5px 12px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Barra de Configuración de Transacción On-Chain */
+    .onchain-config-bar {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 18px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 14px;
+      font-size: 13px;
+    }
+
+    .mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px;
+      border-radius: 10px;
+    }
+
+    .mode-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .mode-btn.active {
+      background: var(--monad-purple);
+      color: #FFF;
+      box-shadow: 0 0 10px var(--monad-purple-glow);
+    }
+
+    .contract-addr-input {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: #FFF;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      width: 280px;
+      outline: none;
     }
 
     .grid-assets {
@@ -423,6 +491,10 @@ export function renderDashboardHtml(): string {
       <span class="badge-monad">Monad 300ms</span>
     </div>
     <div class="header-actions">
+      <div id="walletBalanceBadge" style="display: none;" class="balance-badge">
+        <span>💰 Saldo:</span>
+        <strong id="walletBalanceText">0.0000 MON</strong>
+      </div>
       <div class="connection-status">
         <div id="statusDot" class="dot"></div>
         <span id="statusText">Conectando SSE...</span>
@@ -449,6 +521,22 @@ export function renderDashboardHtml(): string {
       <button id="btnLogin" class="btn-login-monad" onclick="loginWithMonad()">
         <span>🦊 Conectar Wallet Monad</span>
       </button>
+    </div>
+  </div>
+
+  <!-- BARRA DE CONTROL ON-CHAIN / SIMULACIÓN -->
+  <div class="onchain-config-bar">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <span style="font-weight: 700;">MODO DE COMPRA:</span>
+      <div class="mode-toggle">
+        <button id="btnModeOnChain" class="mode-btn active" onclick="setMode('onchain')">⚡ En Cadena Real (Descuenta MON)</button>
+        <button id="btnModeSim" class="mode-btn" onclick="setMode('sim')">🧪 Simulación (0 Gas)</button>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 12px; color: var(--text-muted);">Contrato / Tesorería:</span>
+      <input type="text" id="contractAddrInput" class="contract-addr-input" placeholder="0x... (Opcional, predeterminado)" />
     </div>
   </div>
 
@@ -505,6 +593,31 @@ export function renderDashboardHtml(): string {
     let sessionToken = localStorage.getItem('monad_session_token') || null;
     let assetsData = [];
     let tapCounter = 0;
+    let purchaseMode = 'onchain'; // 'onchain' o 'sim'
+    let configuredContractAddress = '';
+
+    function setMode(mode) {
+      purchaseMode = mode;
+      document.getElementById('btnModeOnChain').className = 'mode-btn ' + (mode === 'onchain' ? 'active' : '');
+      document.getElementById('btnModeSim').className = 'mode-btn ' + (mode === 'sim' ? 'active' : '');
+    }
+
+    // Consultar el saldo real en MON de la wallet conectada
+    async function updateWalletBalance() {
+      if (!currentUser || !window.ethereum) return;
+      try {
+        const balanceHex = await window.ethereum.request({
+          method: 'eth_getBalance',
+          params: [currentUser, 'latest']
+        });
+        const balanceWei = BigInt(balanceHex);
+        const balanceMon = (Number(balanceWei) / 1e18).toFixed(4);
+        document.getElementById('walletBalanceText').innerText = balanceMon + ' MON';
+        document.getElementById('walletBalanceBadge').style.display = 'inline-flex';
+      } catch (err) {
+        console.error('Error obteniendo saldo de Monad:', err);
+      }
+    }
 
     // Conectar y autenticar mediante firma criptográfica de Monad (SIWE)
     async function loginWithMonad() {
@@ -531,7 +644,6 @@ export function renderDashboardHtml(): string {
               params: [{ chainId: MONAD_CHAIN_ID_HEX }],
             });
           } catch (switchError) {
-            // Si no está agregada la red Monad, la registramos
             if (switchError.code === 4902) {
               await window.ethereum.request({
                 method: 'wallet_addEthereumChain',
@@ -584,6 +696,7 @@ export function renderDashboardHtml(): string {
         localStorage.setItem('monad_user_address', account);
 
         updateAuthUI(account);
+        await updateWalletBalance();
       } catch (err) {
         console.error('Error en autenticación Monad:', err);
         alert('Error autenticando con Monad: ' + (err.message || err));
@@ -626,6 +739,7 @@ export function renderDashboardHtml(): string {
             currentUser = data.user.address;
             sessionToken = savedToken;
             updateAuthUI(currentUser);
+            await updateWalletBalance();
           } else {
             localStorage.removeItem('monad_session_token');
           }
@@ -635,17 +749,56 @@ export function renderDashboardHtml(): string {
       }
     }
 
+    // EJECUTAR COMPRA / TAP (EN CADENA REAL O SIMULADO)
     async function sendTap(assetId, shares = 1) {
       if (!currentUser) {
-        // Pedir logueo primero si no está conectado
-        const proceed = confirm('Debes iniciar sesión con tu wallet de Monad para comprar acciones y competir por el lote. ¿Deseas conectarte ahora?');
+        const proceed = confirm('Debes conectar tu wallet de Monad para comprar acciones y competir por el lote. ¿Deseas conectarte ahora?');
         if (proceed) {
           await loginWithMonad();
         }
         return;
       }
 
+      const asset = assetsData.find(a => a.id === assetId);
+      if (!asset) return;
+
+      // 1. Calcular costo exacto de la compra en MON
+      const costMon = (asset.currentPrice * shares).toFixed(6);
+      const costWei = BigInt(Math.floor(parseFloat(costMon) * 1e18));
+      const costWeiHex = '0x' + costWei.toString(16);
+
+      let txHash = undefined;
+
       try {
+        // 2. Si está en Modo On-Chain: Solicitar transacción real en MetaMask para descontar MON
+        if (purchaseMode === 'onchain') {
+          const customAddr = document.getElementById('contractAddrInput').value.trim();
+          const targetTo = customAddr || configuredContractAddress || currentUser;
+
+          // Si hay contrato configurado, codificamos la llamada buyShares(assetId, shares)
+          // Selector: 0xbeebc5da
+          let callData = '0x';
+          if (customAddr || configuredContractAddress) {
+            const paramAssetId = BigInt(assetId).toString(16).padStart(64, '0');
+            const paramShares = BigInt(shares).toString(16).padStart(64, '0');
+            callData = '0xbeebc5da' + paramAssetId + paramShares;
+          }
+
+          // ABRIR METAMASK PARA CONFIRMAR Y DESCONTAR FONDOS REALES
+          txHash = await window.ethereum.request({
+            method: 'eth_sendTransaction',
+            params: [{
+              from: currentUser,
+              to: targetTo,
+              value: costWeiHex,
+              data: callData,
+            }]
+          });
+
+          console.log('[+] Transacción enviada en Monad Testnet! TxHash:', txHash);
+        }
+
+        // 3. Registrar compra en el backend
         const res = await fetch('/api/tap-to-own/tap', {
           method: 'POST',
           headers: { 
@@ -655,15 +808,25 @@ export function renderDashboardHtml(): string {
           body: JSON.stringify({ 
             assetId, 
             buyerAddress: currentUser, 
-            sharesCount: shares 
+            sharesCount: shares,
+            txHash
           })
         });
+
         const data = await res.json();
         if (!data.success) {
           alert('Error en Tap: ' + (data.error || 'Desconocido'));
         }
-      } catch (e) {
-        console.error('Error al enviar tap:', e);
+
+        // 4. Actualizar el saldo de la wallet de inmediato para reflejar el descuento
+        setTimeout(updateWalletBalance, 1200);
+      } catch (err) {
+        if (err.code === 4001) {
+          console.warn('Transacción cancelada por el usuario en su wallet.');
+        } else {
+          console.error('Error ejecutando compra on-chain:', err);
+          alert('Error en Monad: ' + (err.message || err));
+        }
       }
     }
 
@@ -767,9 +930,13 @@ export function renderDashboardHtml(): string {
         ? '<strong style="color: var(--gold);">👑 ¡NUEVO PATRÓN!</strong>' 
         : '<span style="color: #836EF9;">TAP</span>';
 
+      const txLink = evt.txHash 
+        ? \`<a href="https://testnet.monadexplorer.com/tx/\${evt.txHash}" target="_blank" style="color: #00E5FF; text-decoration: none; margin-left: 6px;">[Tx ↗]</a>\` 
+        : '';
+
       item.innerHTML = \`
         <div>
-          \${badge} <strong style="color: #FFF;">\${evt.buyer}</strong> compró <strong>\${evt.shares}</strong> acc. de <em>\${evt.assetName}</em>
+          \${badge} <strong style="color: #FFF;">\${evt.buyer}</strong> compró <strong>\${evt.shares}</strong> acc. de <em>\${evt.assetName}</em> \${txLink}
         </div>
         <div style="font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text-muted);">
           \${evt.totalCost} MON • \${timeStr}
@@ -828,8 +995,23 @@ export function renderDashboardHtml(): string {
       };
     }
 
+    // Cargar información del contrato desde el backend
+    async function loadContractInfo() {
+      try {
+        const res = await fetch('/api/tap-to-own/contract-info');
+        const data = await res.json();
+        if (data.contract && data.contract.address && data.contract.address.startsWith('0x')) {
+          configuredContractAddress = data.contract.address;
+          document.getElementById('contractAddrInput').value = configuredContractAddress;
+        }
+      } catch (e) {
+        console.error('Error cargando contract info:', e);
+      }
+    }
+
     window.addEventListener('DOMContentLoaded', () => {
       checkExistingSession();
+      loadContractInfo();
       initSSE();
     });
   </script>

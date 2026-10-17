@@ -157,7 +157,7 @@ class TapToOwnService {
   /**
    * Ejecutar un "Tap": Comprar una o varias micro-acciones de un lote
    */
-  public tapToBuy(assetId: number, buyerAddress: string, sharesCount: number = 1): { success: boolean; event?: TapEvent; error?: string } {
+  public tapToBuy(assetId: number, buyerAddress: string, sharesCount: number = 1, txHash?: string): { success: boolean; event?: TapEvent; error?: string } {
     const asset = this.assets.find((a) => a.id === assetId);
     if (!asset) {
       return { success: false, error: "Lote de café no encontrado" };
@@ -236,7 +236,9 @@ class TapToOwnService {
       isNewPatron,
       previousPatron: isNewPatron ? oldPatron : undefined,
       type: "BUY",
+      txHash,
     };
+
 
     this.recentEvents.unshift(tapEvent);
     if (this.recentEvents.length > 50) {

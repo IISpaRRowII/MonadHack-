@@ -37,7 +37,7 @@ tapToOwnRouter.get("/assets/:id", (req: Request, res: Response) => {
 
 // 3. Ejecutar un TAP (Comprar micro-acciones)
 tapToOwnRouter.post("/tap", (req: Request, res: Response) => {
-  const { assetId, sharesCount = 1 } = req.body;
+  const { assetId, sharesCount = 1, txHash } = req.body;
   let buyerAddress = req.body.buyerAddress;
 
   // Verificar si viene con sesión autenticada de Monad
@@ -57,10 +57,11 @@ tapToOwnRouter.post("/tap", (req: Request, res: Response) => {
     });
   }
 
-  const result = tapToOwnService.tapToBuy(Number(assetId), String(buyerAddress), Number(sharesCount));
+  const result = tapToOwnService.tapToBuy(Number(assetId), String(buyerAddress), Number(sharesCount), txHash);
   if (!result.success) {
     return res.status(400).json({ success: false, error: result.error });
   }
+
 
   res.json({
     success: true,

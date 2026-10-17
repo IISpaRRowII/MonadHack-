@@ -40,6 +40,7 @@ export interface TapEvent {
   isNewPatron: boolean;
   previousPatron?: string;
   type: 'BUY' | 'SELL';
+  txHash?: string;
 }
 
 export interface LeaderboardEntry {
@@ -55,7 +56,9 @@ export interface TapRequest {
   assetId: number;
   buyerAddress: string;
   sharesCount?: number;
+  txHash?: string;
 }
+
 
 export interface SellRequest {
   assetId: number;
